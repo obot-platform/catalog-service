@@ -698,6 +698,8 @@ func getReposHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
+	overrideTotalCount := false
+
 	// Parse the results
 	repos := make([]RepoInfo, 0)
 	for rows.Next() {
@@ -732,11 +734,12 @@ func getReposHandler(w http.ResponseWriter, r *http.Request) {
 				if metadata["Featured"] == "true" {
 					repos = append(repos, repo)
 				}
-			} else if filter == "Certified MCP Server" {
+			} else if filter == "Certified" {
 				if metadata["Certified"] == "true" {
 					repos = append(repos, repo)
 				}
 			}
+			overrideTotalCount = true
 		} else {
 			repos = append(repos, repo)
 		}
@@ -749,7 +752,10 @@ func getReposHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Set the total count in the response header
-	w.Header().Set("X-Total-Count", strconv.Itoa(len(repos)))
+	if overrideTotalCount {
+		totalCount = len(repos)
+	}
+	w.Header().Set("X-Total-Count", strconv.Itoa(totalCount))
 
 	// Return the repositories as JSON
 	w.Header().Set("Content-Type", "application/json")

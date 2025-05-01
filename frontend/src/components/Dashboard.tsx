@@ -224,7 +224,7 @@ const Dashboard = () => {
               <SelectContent>
                 <SelectItem value="all">All</SelectItem>
                 <SelectItem value="Featured">Featured</SelectItem>
-                <SelectItem value="Certified MCP Server">Certified</SelectItem>
+                <SelectItem value="Certified">Certified</SelectItem>
               </SelectContent>
             </Select>
 
