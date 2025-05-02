@@ -947,12 +947,34 @@ func generateConfigForSpecificRepoHandler(w http.ResponseWriter, r *http.Request
 		http.Error(w, fmt.Sprintf("Error processing repository: %v", err), http.StatusInternalServerError)
 		return
 	}
-
-	manifest, err := json.Marshal(analysis)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Error marshalling manifest: %v", err), http.StatusInternalServerError)
+	if len(analysis.Configs) == 0 {
+		log.Printf("No MCP server found in repository %s", repo.FullName)
 		return
 	}
+
+	manifestBytes, err := json.Marshal(analysis.Configs)
+	if err != nil {
+		log.Printf("Error marshaling manifest for repository %s: %v", repo.FullName, err)
+	} else {
+		repo.Manifest = string(manifestBytes)
+	}
+
+	metadata := map[string]string{}
+	if repo.Metadata != "" {
+		err = json.Unmarshal([]byte(repo.Metadata), &metadata)
+		if err != nil {
+			log.Printf("Error unmarshalling metadata for repository %s: %v", repo.FullName, err)
+		}
+	}
+	metadata["categories"] = analysis.Category
+	metadataBytes, err := json.Marshal(metadata)
+	if err != nil {
+		log.Printf("Error marshaling metadata for repository %s: %v", repo.FullName, err)
+	} else {
+		repo.Metadata = string(metadataBytes)
+	}
+	repo.Description = analysis.Description
+	repo.DisplayName = analysis.Name
 
 	// Insert or update the repository in the database
 	var id int
@@ -960,10 +982,10 @@ func generateConfigForSpecificRepoHandler(w http.ResponseWriter, r *http.Request
 		// Update existing repository
 		_, err = db.Exec(`
 			UPDATE repositories 
-			SET url = $1, description = $2, stars = $3, readme_content = $4, language = $5, manifest = $6, path = $7
-			WHERE id = $8
+			SET url = $1, description = $2, stars = $3, readme_content = $4, language = $5, manifest = $6, path = $7, metadata = $8, display_name = $9
+			WHERE id = $10
 		`, repo.URL, repo.Description, repo.Stars, repo.ReadmeContent,
-			repo.Language, manifest, repo.Path, repoID)
+			repo.Language, repo.Manifest, repo.Path, repo.Metadata, repo.DisplayName, repoID)
 
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Error updating repository: %v", err), http.StatusInternalServerError)
