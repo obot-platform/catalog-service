@@ -56,9 +56,11 @@ type Config struct {
 }
 
 type MCPServerConfig struct {
-	Env     []MCPPair `json:"env"`
-	Command string    `json:"command,omitempty"`
-	Args    []string  `json:"args,omitempty"`
+	Env         []MCPPair `json:"env"`
+	Command     string    `json:"command,omitempty"`
+	Args        []string  `json:"args,omitempty"`
+	HTTPHeaders []MCPPair `json:"httpHeaders,omitempty"`
+	URL         string    `json:"url,omitempty"`
 }
 
 type MCPPair struct {
@@ -132,11 +134,11 @@ func main() {
 	mux.HandleFunc("GET /api/repos/count", getReposCountHandler)
 	mux.HandleFunc("GET /api/search", searchReposHandler)
 	mux.HandleFunc("GET /api/search-readme", searchReposByReadmeHandler)
-	mux.HandleFunc("GET /api/repo/{id}", getRepoHandler)
-	mux.HandleFunc("PUT /api/repo/{id}", updateRepoHandler)
-	mux.HandleFunc("PUT /api/repo/{id}/metadata", updateRepoMetadataHandler)
-	mux.HandleFunc("POST /api/repo/{id}/generate", generateConfigForSpecificRepoHandler)
-	mux.HandleFunc("POST /api/repo/{id}/run", runMCPServerHandler)
+	mux.HandleFunc("GET /api/repos/{id}", getRepoHandler)
+	mux.HandleFunc("PUT /api/repos/{id}", updateRepoHandler)
+	mux.HandleFunc("PUT /api/repos/{id}/metadata", updateRepoMetadataHandler)
+	mux.HandleFunc("POST /api/repos/{id}/generate", generateConfigForSpecificRepoHandler)
+	mux.HandleFunc("POST /api/repos/{id}/run", runMCPServerHandler)
 
 	// Create a file server for the static files
 	fs := http.FileServer(http.Dir("./frontend/dist"))
@@ -233,7 +235,7 @@ func collectData() {
 	log.Println("Searching repositories by README content...")
 	limit, _ := strconv.Atoi(os.Getenv("LIMIT"))
 	if limit == 0 {
-		limit = 2000
+		limit = 4000
 	}
 	searchReposByReadme(ctx, limit)
 }
@@ -260,6 +262,8 @@ type MCPServerConfig struct {
 	Env         []MCPPair json:"env"
 	Command     string    json:"command,omitempty"
 	Args        []string json:"args,omitempty"
+	HTTPHeaders []MCPPair json:"httpHeaders,omitempty"
+	URL         string    json:"url,omitempty"
 }
 
 type MCPPair struct {
@@ -575,7 +579,7 @@ func searchReposByReadme(ctx context.Context, limit int) {
 		if err == nil {
 			// Repository exists in DB, skip it
 			log.Printf("Repository %s already exists in database, skipping", fullName)
-			if repoFromDB.ReadmeContent == readmeContent {
+			if repoFromDB.ReadmeContent == readmeContent && os.Getenv("RESCRAPE") != "true" {
 				continue
 			}
 		}
@@ -887,29 +891,15 @@ func generateConfigForSpecificRepoHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Parse the request body
-	var requestBody struct {
-		RepoName string `json:"repoName"` // Can be a GitHub ID or full name (owner/repo)
-	}
-
-	err := json.NewDecoder(r.Body).Decode(&requestBody)
-	if err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if requestBody.RepoName == "" {
-		http.Error(w, "Repository ID or full name is required", http.StatusBadRequest)
-		return
-	}
+	repoID := r.PathValue("id")
 
 	// Check if repository exists and get its data
 	var exists bool
 	var existingID int
 	var repo RepoInfo
-	err = db.QueryRow(`
+	err := db.QueryRow(`
 		SELECT EXISTS(
-			SELECT 1 FROM repositories WHERE full_name = $1
+			SELECT 1 FROM repositories WHERE id = $1
 		),
 		COALESCE(id, 0),
 		COALESCE(full_name, ''),
@@ -921,8 +911,8 @@ func generateConfigForSpecificRepoHandler(w http.ResponseWriter, r *http.Request
 		COALESCE(language, ''),
 		COALESCE(manifest::text, ''),
 		COALESCE(path, '')
-		FROM repositories WHERE full_name = $1
-	`, requestBody.RepoName).Scan(
+		FROM repositories WHERE id = $1
+	`, repoID).Scan(
 		&exists,
 		&existingID,
 		&repo.FullName,
@@ -971,9 +961,9 @@ func generateConfigForSpecificRepoHandler(w http.ResponseWriter, r *http.Request
 		_, err = db.Exec(`
 			UPDATE repositories 
 			SET url = $1, description = $2, stars = $3, readme_content = $4, language = $5, manifest = $6, path = $7
-			WHERE full_name = $8
+			WHERE id = $8
 		`, repo.URL, repo.Description, repo.Stars, repo.ReadmeContent,
-			repo.Language, manifest, repo.Path, repo.FullName)
+			repo.Language, manifest, repo.Path, repoID)
 
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Error updating repository: %v", err), http.StatusInternalServerError)
@@ -1257,7 +1247,9 @@ func updateRepoMetadataHandler(w http.ResponseWriter, r *http.Request) {
 
 func startCronJobs() {
 	c := cron.New()
-	go collectData()
+	if os.Getenv("RESCRAPE") == "true" {
+		go collectData()
+	}
 
 	// Schedule collectData() to run every day at midnight
 	_, err := c.AddFunc("0 0 * * *", func() {

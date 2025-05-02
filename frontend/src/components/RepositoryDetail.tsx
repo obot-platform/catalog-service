@@ -45,7 +45,7 @@ const RepositoryDetail = () => {
   useEffect(() => {
     const fetchRepository = async () => {
       try {
-        const response = await fetch(`/api/repo/${id}`);
+        const response = await fetch(`/api/repos/${id}`);
         if (!response.ok) {
           throw new Error("Failed to fetch repository details");
         }
@@ -111,7 +111,7 @@ const RepositoryDetail = () => {
 
   const updateMetadata = async (updatedMetadata: Record<string, string>) => {
     try {
-      const response = await fetch(`/api/repo/${id}/metadata`, {
+      const response = await fetch(`/api/repos/${id}/metadata`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
@@ -265,10 +265,40 @@ const RepositoryDetail = () => {
                   </SyntaxHighlighter>
                   <Button
                     onClick={() => setRunDialogOpen(true)}
-                    className="mt-4"
+                    className="mt-4 mr-2"
                     variant="outline"
                   >
                     Edit Configuration
+                  </Button>
+                  <Button
+                    onClick={async () => {
+                      try {
+                        const response = await fetch(
+                          `/api/repos/${id}/generate`,
+                          {
+                            method: "POST",
+                          }
+                        );
+                        if (!response.ok) {
+                          throw new Error(response.statusText);
+                        }
+                        toast({
+                          title: "Configuration Regenerated",
+                          description:
+                            "The configuration was regenerated successfully.",
+                        });
+                      } catch (error) {
+                        toast({
+                          title: "Error",
+                          description: `There was an error regenerating the configuration. Error: ${error}`,
+                          variant: "destructive",
+                        });
+                      }
+                    }}
+                    className="mt-4"
+                    variant="outline"
+                  >
+                    Regenerate Configuration
                   </Button>
                   <Dialog open={runDialogOpen} onOpenChange={setRunDialogOpen}>
                     <DialogContent className="sm:max-w-[600px]">
@@ -321,7 +351,7 @@ const RepositoryDetail = () => {
                           onClick={async () => {
                             try {
                               const manifest = JSON.parse(configText);
-                              const response = await fetch(`/api/repo/${id}`, {
+                              const response = await fetch(`/api/repos/${id}`, {
                                 method: "PUT",
                                 headers: {
                                   "Content-Type": "application/json",
