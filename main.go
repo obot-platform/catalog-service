@@ -56,11 +56,13 @@ type Config struct {
 }
 
 type MCPServerConfig struct {
-	Env         []MCPPair `json:"env"`
-	Command     string    `json:"command,omitempty"`
-	Args        []string  `json:"args,omitempty"`
-	HTTPHeaders []MCPPair `json:"httpHeaders,omitempty"`
-	URL         string    `json:"url,omitempty"`
+	Env            []MCPPair `json:"env"`
+	Command        string    `json:"command,omitempty"`
+	Args           []string  `json:"args,omitempty"`
+	HTTPHeaders    []MCPPair `json:"httpHeaders,omitempty"`
+	URL            string    `json:"url,omitempty"`
+	URLDescription string    `json:"urlDescription,omitempty"`
+	Preferred      bool      `json:"preferred,omitempty"`
 }
 
 type MCPPair struct {
@@ -264,6 +266,7 @@ type MCPServerConfig struct {
 	Args        []string json:"args,omitempty"
 	HTTPHeaders []MCPPair json:"httpHeaders,omitempty"
 	URL         string    json:"url,omitempty"
+	URLDescription string    json:"urlDescription,omitempty"
 }
 
 type MCPPair struct {
@@ -302,7 +305,10 @@ When generating category, pick from the following categories:
 
 It can have multiple categories. connect them with comma.
 
-You should also look for mcp server config whose command is only npx, docker and uv. If command is not one of these, you should not return empty json object.
+If config has url, it means it is SSE based MCP server. You should only populate url, urlDescription and headers. 
+If config has command, it means it is CLI based MCP server. You should only populate command, args and env.
+
+The description from OpenAIResponse should be concise and to the point on what this MCP server is for.
 
 Make sure you can extract command, args and env from the mcp config example in the readme.
 It is usually wrapped into json block. For other MCPPair, you should look in the readme to find possible explaination.
@@ -593,6 +599,8 @@ func searchReposByReadme(ctx context.Context, limit int) {
 				log.Printf("No MCP server found in repository %s", fullName)
 				continue
 			}
+
+			markPreferred(analysis.Configs)
 
 			manifestBytes, err := json.Marshal(analysis.Configs)
 			if err != nil {
@@ -952,6 +960,8 @@ func generateConfigForSpecificRepoHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	markPreferred(analysis.Configs)
+
 	manifestBytes, err := json.Marshal(analysis.Configs)
 	if err != nil {
 		log.Printf("Error marshaling manifest for repository %s: %v", repo.FullName, err)
@@ -1292,4 +1302,41 @@ func isAuthorized(r *http.Request) bool {
 	}
 	expected := os.Getenv("OBOT_CATALOG_SERVER_ACCESS_TOKEN")
 	return cookie.Value == expected
+}
+
+func markPreferred(configs []MCPServerConfig) {
+	var preferredIndex = -1
+
+	// 1st priority: npx
+	for i, cfg := range configs {
+		if cfg.Command == "npx" {
+			preferredIndex = i
+			break
+		}
+	}
+
+	// 2nd priority: uv or uvx
+	if preferredIndex == -1 {
+		for i, cfg := range configs {
+			if cfg.Command == "uv" || cfg.Command == "uvx" {
+				preferredIndex = i
+				break
+			}
+		}
+	}
+
+	// 3rd priority: docker
+	if preferredIndex == -1 {
+		for i, cfg := range configs {
+			if cfg.Command == "docker" {
+				preferredIndex = i
+				break
+			}
+		}
+	}
+
+	// Set the Prefer flag
+	if preferredIndex != -1 {
+		configs[preferredIndex].Preferred = true
+	}
 }
