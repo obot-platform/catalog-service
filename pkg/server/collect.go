@@ -334,7 +334,7 @@ func scrapeToolDefinitions(ctx context.Context, repo *types.RepoInfo) error {
 
 		allResults = append(allResults, result1.CodeResults...)
 
-		query2 := fmt.Sprintf("mcp.tool() language:python repo:%s/%s", parts[0], parts[1])
+		query2 := fmt.Sprintf("mcp.tool language:python repo:%s/%s", parts[0], parts[1])
 
 		result2, resp, err := githubClient.Search.Code(ctx, query2, opts)
 		if err != nil {
