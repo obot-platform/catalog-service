@@ -72,6 +72,14 @@ const RepositoryDetail = () => {
         if (repo.metadata) {
           setMetadata(JSON.parse(repo.metadata));
         }
+        if (repo.toolDefinitions) {
+          try {
+            const parsedTools = JSON.parse(repo.toolDefinitions);
+            setTools(parsedTools);
+          } catch (e) {
+            console.error("Failed to parse tool definitions:", e);
+          }
+        }
 
         setLoading(false);
       } catch (err) {
@@ -222,9 +230,9 @@ const RepositoryDetail = () => {
         <TabsList className="flex justify-start">
           <TabsTrigger value="readme">README</TabsTrigger>
           <TabsTrigger value="manifest">Configuration</TabsTrigger>
-          {/* <TabsTrigger value="tools" disabled={tools.length === 0}>
+          <TabsTrigger value="tools" disabled={tools.length === 0}>
             Tools {tools.length > 0 && `(${tools.length})`}
-          </TabsTrigger> */}
+          </TabsTrigger>
           <TabsTrigger value="metadata">Metadata</TabsTrigger>
         </TabsList>
 
@@ -422,29 +430,6 @@ const RepositoryDetail = () => {
                             Input Schema
                           </h4>
 
-                          {/* Display required properties */}
-                          {tool.inputSchema.required &&
-                            tool.inputSchema.required.length > 0 && (
-                              <div className="mb-2">
-                                <p className="text-xs font-medium text-muted-foreground">
-                                  Required Parameters:
-                                </p>
-                                <div className="flex flex-wrap gap-1 mt-1">
-                                  {tool.inputSchema.required.map(
-                                    (param: string) => (
-                                      <span
-                                        key={param}
-                                        className="inline-flex items-center rounded-full bg-primary/10 text-primary px-2 py-0.5 text-xs font-medium"
-                                      >
-                                        {param}
-                                      </span>
-                                    )
-                                  )}
-                                </div>
-                              </div>
-                            )}
-
-                          {/* Display properties table */}
                           {tool.inputSchema.properties &&
                             Object.keys(tool.inputSchema.properties).length >
                               0 && (
@@ -473,14 +458,11 @@ const RepositoryDetail = () => {
                                       >
                                         <td className="px-4 py-2 font-mono text-xs">
                                           {name}
-                                          {tool.inputSchema.required &&
-                                            tool.inputSchema.required.includes(
-                                              name
-                                            ) && (
-                                              <span className="text-destructive ml-1">
-                                                *
-                                              </span>
-                                            )}
+                                          {prop.required && (
+                                            <span className="text-destructive ml-1">
+                                              *
+                                            </span>
+                                          )}
                                         </td>
                                         <td className="px-4 py-2 font-mono text-xs">
                                           {prop.type}
@@ -508,35 +490,6 @@ const RepositoryDetail = () => {
                               {JSON.stringify(tool.inputSchema, null, 2)}
                             </SyntaxHighlighter>
                           </details>
-                        </div>
-                      )}
-
-                      {/* Display annotations if present */}
-                      {tool.annotations &&
-                        Object.keys(tool.annotations).length > 0 && (
-                          <div className="mt-4">
-                            <h4 className="text-sm font-medium mb-2">
-                              Annotations
-                            </h4>
-                            <div className="bg-muted rounded-md p-2">
-                              <code className="text-xs">
-                                {JSON.stringify(tool.annotations, null, 2)}
-                              </code>
-                            </div>
-                          </div>
-                        )}
-
-                      {/* Display authentication if present */}
-                      {tool.auth && Object.keys(tool.auth).length > 0 && (
-                        <div className="mt-4">
-                          <h4 className="text-sm font-medium mb-2">
-                            Authentication
-                          </h4>
-                          <div className="bg-muted rounded-md p-2">
-                            <code className="text-xs">
-                              {JSON.stringify(tool.auth, null, 2)}
-                            </code>
-                          </div>
                         </div>
                       )}
                     </div>

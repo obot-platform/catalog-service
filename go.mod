@@ -1,4 +1,4 @@
-module github-mcp-scanner
+module github.com/obot-platform/catalog-service
 
 go 1.23
 

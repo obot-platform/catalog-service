@@ -28,8 +28,15 @@ export interface Stats {
 export interface MCPTool {
   name: string;
   description: string;
-  input_schema?: any;
-  inputSchema?: any;
-  annotations?: Record<string, any>;
-  auth?: Record<string, string>;
+  inputSchema?: InputSchema;
+}
+
+export interface InputSchema {
+  properties: Record<string, Property>;
+}
+
+export interface Property {
+  type: string;
+  description: string;
+  required: boolean;
 }
