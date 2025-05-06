@@ -75,6 +75,7 @@ func Run() {
 	mux.HandleFunc("PUT /api/repos/{id}", updateRepoHandler)
 	mux.HandleFunc("PUT /api/repos/{id}/metadata", updateRepoMetadataHandler)
 	mux.HandleFunc("POST /api/repos/{id}/generate", generateConfigForSpecificRepoHandler)
+	mux.HandleFunc("POST /api/repos/rescrape", rescrapeHandler)
 
 	// Create a file server for the static files
 	fs := http.FileServer(http.Dir("./frontend/dist"))

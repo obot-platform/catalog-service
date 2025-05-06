@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"strconv"
 
 	"github.com/obot-platform/catalog-service/pkg/types"
@@ -282,6 +281,8 @@ func generateConfigForSpecificRepoHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	force := r.URL.Query().Get("force") == "true"
+
 	repoID := r.PathValue("id")
 
 	// Check if repository exists and get its data
@@ -378,7 +379,7 @@ func generateConfigForSpecificRepoHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	if foundPreferred {
-		if repo.ToolDefinitions == "" || os.Getenv("RESCRAPE") == "true" {
+		if repo.ToolDefinitions == "" || force {
 			err = scrapeToolDefinitions(r.Context(), &repo)
 			if err != nil {
 				log.Printf("Error scraping tool definitions for repository %s: %v", repo.FullName, err)
@@ -540,6 +541,20 @@ func updateRepoMetadataHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Error updating repository metadata: %v", err), http.StatusInternalServerError)
 		return
 	}
+
+	w.WriteHeader(200)
+}
+
+func rescrapeHandler(w http.ResponseWriter, r *http.Request) {
+	if !utils.IsAuthorized(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	query := r.URL.Query().Get("force")
+	force := query == "true"
+
+	go collectData(force)
 
 	w.WriteHeader(200)
 }

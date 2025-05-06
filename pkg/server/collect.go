@@ -19,16 +19,12 @@ import (
 )
 
 func startCronJobs() {
-
 	c := cron.New()
-	if os.Getenv("RESCRAPE") == "true" {
-		go collectData()
-	}
 
 	// Schedule collectData() to run every day at midnight
 	_, err := c.AddFunc("0 0 * * *", func() {
 		log.Println("Running scheduled daily data collection...")
-		go collectData()
+		go collectData(false)
 	})
 	if err != nil {
 		log.Fatalf("Error scheduling cron job: %v", err)
@@ -37,17 +33,17 @@ func startCronJobs() {
 	c.Start()
 }
 
-func collectData() {
+func collectData(force bool) {
 	ctx := context.Background()
 	log.Println("Searching repositories by README content...")
 	limit, _ := strconv.Atoi(os.Getenv("LIMIT"))
 	if limit == 0 {
 		limit = 4000
 	}
-	searchReposByReadme(ctx, limit)
+	searchReposByReadme(ctx, limit, force)
 }
 
-func searchReposByReadme(ctx context.Context, limit int) {
+func searchReposByReadme(ctx context.Context, limit int, force bool) {
 	opts := &github.SearchOptions{
 		ListOptions: github.ListOptions{
 			PerPage: 1000,
@@ -289,7 +285,7 @@ func searchReposByReadme(ctx context.Context, limit int) {
 		}
 
 		if foundPreferred {
-			if repoFromDB.ToolDefinitions == "" || os.Getenv("RESCRAPE") == "true" {
+			if repoFromDB.ToolDefinitions == "" || force {
 				err = scrapeToolDefinitions(ctx, &repoInfo)
 				if err != nil {
 					log.Printf("Error scraping tool definitions for repository %s: %v", fullName, err)
