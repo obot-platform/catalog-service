@@ -378,7 +378,7 @@ func generateConfigForSpecificRepoHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	if foundPreferred {
-		if repo.ToolDefinitions == "" || os.Getenv("RESCRAPE") == "true" || true {
+		if repo.ToolDefinitions == "" || os.Getenv("RESCRAPE") == "true" {
 			err = scrapeToolDefinitions(r.Context(), &repo)
 			if err != nil {
 				log.Printf("Error scraping tool definitions for repository %s: %v", repo.FullName, err)
