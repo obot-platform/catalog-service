@@ -4,12 +4,11 @@ go 1.23
 
 require (
 	github.com/google/go-github/v60 v60.0.0
-	github.com/gorilla/mux v1.8.1
 	github.com/joho/godotenv v1.5.1
 	github.com/lib/pq v1.10.9
 	github.com/mark3labs/mcp-go v0.21.1
 	github.com/mattn/go-sqlite3 v1.14.28
-	github.com/sashabaranov/go-openai v1.38.2
+	github.com/sashabaranov/go-openai v1.39.1
 	golang.org/x/oauth2 v0.18.0
 )
 

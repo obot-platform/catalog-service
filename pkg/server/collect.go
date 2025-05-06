@@ -234,7 +234,7 @@ func searchReposByReadme(ctx context.Context, limit int) {
 		}
 
 		var repoFromDB types.RepoInfo
-		err = db.QueryRow("SELECT readme_content, manifest, metadata, FROM repositories WHERE full_name = $1", fullName).Scan(&repoFromDB.ReadmeContent, &repoFromDB.Manifest, &repoFromDB.Metadata)
+		err = db.QueryRow("SELECT readme_content, manifest, metadata, tool_definitions FROM repositories WHERE full_name = $1", fullName).Scan(&repoFromDB.ReadmeContent, &repoFromDB.Manifest, &repoFromDB.Metadata, &repoFromDB.ToolDefinitions)
 		if err == nil {
 			// Repository exists in DB, skip it
 			log.Printf("Repository %s already exists in database, skipping", fullName)
@@ -289,10 +289,16 @@ func searchReposByReadme(ctx context.Context, limit int) {
 		}
 
 		if foundPreferred {
-			err = scrapeToolDefinitions(ctx, &repoInfo)
-			if err != nil {
-				log.Printf("Error scraping tool definitions for repository %s: %v", fullName, err)
+			if repoFromDB.ToolDefinitions == "" || os.Getenv("RESCRAPE") == "true" {
+				err = scrapeToolDefinitions(ctx, &repoInfo)
+				if err != nil {
+					log.Printf("Error scraping tool definitions for repository %s: %v", fullName, err)
+				}
 			}
+		}
+
+		if repoInfo.ToolDefinitions == "" {
+			repoInfo.ToolDefinitions = "{}"
 		}
 
 		utils.SaveRepo(db, repoInfo)
@@ -314,7 +320,7 @@ func scrapeToolDefinitions(ctx context.Context, repo *types.RepoInfo) error {
 
 		var allResults []*github.CodeResult
 
-		query1 := fmt.Sprintf("ListToolsRequestSchema language:typescript repo:%s/%s", parts[0], parts[1])
+		query1 := fmt.Sprintf("tool language:typescript repo:%s/%s", parts[0], parts[1])
 
 		result1, resp, err := githubClient.Search.Code(ctx, query1, opts)
 		if err != nil {
@@ -328,7 +334,7 @@ func scrapeToolDefinitions(ctx context.Context, repo *types.RepoInfo) error {
 
 		allResults = append(allResults, result1.CodeResults...)
 
-		query2 := fmt.Sprintf("server.tool language:typescript repo:%s/%s", parts[0], parts[1])
+		query2 := fmt.Sprintf("mcp.tool() language:python repo:%s/%s", parts[0], parts[1])
 
 		result2, resp, err := githubClient.Search.Code(ctx, query2, opts)
 		if err != nil {
@@ -341,20 +347,6 @@ func scrapeToolDefinitions(ctx context.Context, repo *types.RepoInfo) error {
 		}
 
 		allResults = append(allResults, result2.CodeResults...)
-
-		query3 := fmt.Sprintf("mcp.tool language:python repo:%s/%s", parts[0], parts[1])
-
-		result3, resp, err := githubClient.Search.Code(ctx, query3, opts)
-		if err != nil {
-			if _, ok := err.(*github.RateLimitError); ok {
-				log.Printf("Hit rate limit, waiting for reset after time %s...\n", time.Until(resp.Rate.Reset.Time))
-				time.Sleep(time.Until(resp.Rate.Reset.Time))
-				continue
-			}
-			return err
-		}
-
-		allResults = append(allResults, result3.CodeResults...)
 
 		resultSet := make(map[string]*github.CodeResult)
 		for _, codeResult := range allResults {
@@ -369,7 +361,7 @@ func scrapeToolDefinitions(ctx context.Context, repo *types.RepoInfo) error {
 		data := strings.Builder{}
 
 		for _, codeResult := range filteredResults {
-			prefix := strings.TrimSuffix(repo.Path, "/README.md")
+			prefix := strings.TrimSuffix(repo.Path, "README.md")
 			if !strings.HasPrefix(*codeResult.Path, prefix) {
 				continue
 			}
@@ -422,13 +414,19 @@ func scrapeToolDefinitions(ctx context.Context, repo *types.RepoInfo) error {
 		
 		The tool description should be concise and to the point on what this tool is for.
 
+		For typescript code, it can also be added through server.tool() method.
+
+		For python code, it is also added through @mcp.tool() decorator.
+
 		The properties description should be concise and to the point on what this tool parameter is for.
+
+		If you can't find any tool definitions, return an empty ToolResponse. Don't hallucinate.
 		`, data.String())
 
 		response, err := openaiClient.CreateChatCompletion(
 			ctx,
 			openai.ChatCompletionRequest{
-				Model: openai.GPT4o,
+				Model: openai.GPT4Dot1,
 				Messages: []openai.ChatCompletionMessage{
 					{
 						Role:    openai.ChatMessageRoleUser,
@@ -455,6 +453,7 @@ func scrapeToolDefinitions(ctx context.Context, repo *types.RepoInfo) error {
 			return fmt.Errorf("error marshalling tools: %v", err)
 		}
 
+		log.Printf("Updating Tool definitions for %s", repo.FullName)
 		repo.ToolDefinitions = string(toolRaw)
 		return nil
 	}

@@ -1,19 +1,15 @@
 package server
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
-	"strings"
-	"time"
 
-	"github.com/mark3labs/mcp-go/client"
-	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/obot-platform/catalog-service/pkg/types"
 	"github.com/obot-platform/catalog-service/pkg/utils"
 )
@@ -373,16 +369,37 @@ func generateConfigForSpecificRepoHandler(w http.ResponseWriter, r *http.Request
 	repo.Description = analysis.Description
 	repo.DisplayName = analysis.Name
 
+	foundPreferred := false
+	for _, config := range analysis.Configs {
+		if config.Preferred {
+			foundPreferred = true
+			break
+		}
+	}
+
+	if foundPreferred {
+		if repo.ToolDefinitions == "" || os.Getenv("RESCRAPE") == "true" || true {
+			err = scrapeToolDefinitions(r.Context(), &repo)
+			if err != nil {
+				log.Printf("Error scraping tool definitions for repository %s: %v", repo.FullName, err)
+			}
+		}
+	}
+
+	if repo.ToolDefinitions == "" {
+		repo.ToolDefinitions = "{}"
+	}
+
 	// Insert or update the repository in the database
 	var id int
 	if exists {
 		// Update existing repository
 		_, err = db.Exec(`
 			UPDATE repositories 
-			SET url = $1, description = $2, stars = $3, readme_content = $4, language = $5, manifest = $6, path = $7, metadata = $8, display_name = $9
-			WHERE id = $10
+			SET url = $1, description = $2, stars = $3, readme_content = $4, language = $5, manifest = $6, path = $7, metadata = $8, display_name = $9, tool_definitions = $10
+			WHERE id = $11
 		`, repo.URL, repo.Description, repo.Stars, repo.ReadmeContent,
-			repo.Language, repo.Manifest, repo.Path, repo.Metadata, repo.DisplayName, repoID)
+			repo.Language, repo.Manifest, repo.Path, repo.Metadata, repo.DisplayName, repo.ToolDefinitions, repoID)
 
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Error updating repository: %v", err), http.StatusInternalServerError)
@@ -427,142 +444,6 @@ func getReposCountHandler(w http.ResponseWriter, r *http.Request) {
 	// Return the count as JSON
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int{"count": count})
-}
-
-func runMCPServerHandler(w http.ResponseWriter, r *http.Request) {
-	if !utils.IsAuthorized(r) {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	// Parse the repository ID from the URL
-	urlPath := r.URL.Path
-	parts := strings.Split(urlPath, "/")
-	if len(parts) < 4 {
-		http.Error(w, "Invalid URL format", http.StatusBadRequest)
-		return
-	}
-
-	repoIDStr := parts[3]
-	repoID, err := strconv.Atoi(repoIDStr)
-	if err != nil {
-		http.Error(w, "Invalid repository ID", http.StatusBadRequest)
-		return
-	}
-
-	// Get repository information from the database
-	var repo types.RepoInfo
-	err = db.QueryRow(`
-		SELECT id, path, full_name, url, description, stars, language, manifest, readme_content
-		FROM repositories
-		WHERE id = $1
-	`, repoID).Scan(
-		&repo.ID,
-		&repo.Path,
-		&repo.FullName,
-		&repo.URL,
-		&repo.Description,
-		&repo.Stars,
-		&repo.Language,
-		&repo.Manifest,
-		&repo.ReadmeContent,
-	)
-
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Error fetching repository: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	type MCPServerRequest struct {
-		MCPServers map[string]struct {
-			Command     string            `json:"command"`
-			Args        []string          `json:"args"`
-			Env         map[string]string `json:"env,omitempty"`
-			HTTPHeaders map[string]string `json:"httpHeaders,omitempty"`
-			BaseURL     string            `json:"baseURL,omitempty"`
-		} `json:"mcpServers"`
-	}
-	var mcpConfig MCPServerRequest
-
-	err = json.NewDecoder(r.Body).Decode(&mcpConfig)
-	if err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-	if len(mcpConfig.MCPServers) == 0 {
-		http.Error(w, "No MCP server configurations provided", http.StatusBadRequest)
-		return
-	}
-
-	// Get first server config
-	var mcpServer struct {
-		Command     string            `json:"command"`
-		Args        []string          `json:"args"`
-		Env         map[string]string `json:"env,omitempty"`
-		HTTPHeaders map[string]string `json:"httpHeaders,omitempty"`
-		BaseURL     string            `json:"baseURL,omitempty"`
-	}
-	for _, s := range mcpConfig.MCPServers {
-		mcpServer = s
-		break
-	}
-
-	var envSlice []string
-	for key, value := range mcpServer.Env {
-		envSlice = append(envSlice, fmt.Sprintf("%s=%s", key, value))
-	}
-
-	// Create MCP client
-	mcpClient, err := client.NewStdioMCPClient(
-		mcpServer.Command,
-		envSlice,
-		mcpServer.Args...,
-	)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Error creating MCP client: %v", err), http.StatusInternalServerError)
-		return
-	}
-	defer mcpClient.Close()
-
-	// Initialize the client
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	initRequest := mcp.InitializeRequest{}
-	initRequest.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
-	initRequest.Params.ClientInfo = mcp.Implementation{
-		Name:    "mcp-proxy",
-		Version: "1.0.0",
-	}
-
-	_, err = mcpClient.Initialize(ctx, initRequest)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Error initializing MCP client: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// Get available tools
-	toolsRequest := mcp.ListToolsRequest{}
-	toolsResp, err := mcpClient.ListTools(ctx, toolsRequest)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Error listing tools: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// Save tools to database
-	toolsJSON, err := json.Marshal(toolsResp.Tools)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Error marshaling tools: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	_, err = db.Exec("UPDATE repositories SET tool_definitions = $1::jsonb WHERE id = $2", toolsJSON, repoID)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Error saving tools to database: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(200)
 }
 
 func getRepoHandler(w http.ResponseWriter, r *http.Request) {
