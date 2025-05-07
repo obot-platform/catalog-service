@@ -8,7 +8,9 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
+	"github.com/google/go-github/v60/github"
 	"github.com/obot-platform/catalog-service/pkg/types"
 	"github.com/obot-platform/catalog-service/pkg/utils"
 )
@@ -172,7 +174,8 @@ func searchReposHandler(w http.ResponseWriter, r *http.Request) {
 		SELECT id, path, full_name, display_name, url, description, stars, language, manifest, COALESCE(icon, ''), readme_content
 		FROM repositories
 		WHERE 
-			description ILIKE $1
+			description ILIKE $1 OR
+			display_name ILIKE $1
 		ORDER BY stars DESC
 	`, searchQuery)
 	if err != nil {
@@ -302,7 +305,9 @@ func generateConfigForSpecificRepoHandler(w http.ResponseWriter, r *http.Request
 		COALESCE(readme_content, ''),
 		COALESCE(language, ''),
 		COALESCE(manifest::text, ''),
-		COALESCE(path, '')
+		COALESCE(path, ''),
+		COALESCE(proposed_manifest::text, '{}'),
+		COALESCE(tool_definitions::text, '{}')
 		FROM repositories WHERE id = $1
 	`, repoID).Scan(
 		&exists,
@@ -316,6 +321,8 @@ func generateConfigForSpecificRepoHandler(w http.ResponseWriter, r *http.Request
 		&repo.Language,
 		&repo.Manifest,
 		&repo.Path,
+		&repo.ProposedManifest,
+		&repo.ToolDefinitions,
 	)
 	if err != nil && err != sql.ErrNoRows {
 		http.Error(w, fmt.Sprintf("Error checking repository existence: %v", err), http.StatusInternalServerError)
@@ -331,6 +338,11 @@ func generateConfigForSpecificRepoHandler(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error getting readme from database: %v", err), http.StatusInternalServerError)
 		return
+	}
+
+	proposed := true
+	if repo.Manifest == "{}" || force {
+		proposed = false
 	}
 
 	// Process the repository
@@ -350,7 +362,11 @@ func generateConfigForSpecificRepoHandler(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		log.Printf("Error marshaling manifest for repository %s: %v", repo.FullName, err)
 	} else {
-		repo.Manifest = string(manifestBytes)
+		if proposed {
+			repo.ProposedManifest = string(manifestBytes)
+		} else {
+			repo.Manifest = string(manifestBytes)
+		}
 	}
 
 	metadata := map[string]string{}
@@ -379,11 +395,9 @@ func generateConfigForSpecificRepoHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	if foundPreferred {
-		if repo.ToolDefinitions == "" || force {
-			err = scrapeToolDefinitions(r.Context(), &repo)
-			if err != nil {
-				log.Printf("Error scraping tool definitions for repository %s: %v", repo.FullName, err)
-			}
+		err = scrapeToolDefinitions(r.Context(), &repo)
+		if err != nil {
+			log.Printf("Error scraping tool definitions for repository %s: %v", repo.FullName, err)
 		}
 	}
 
@@ -395,13 +409,23 @@ func generateConfigForSpecificRepoHandler(w http.ResponseWriter, r *http.Request
 	var id int
 	if exists {
 		// Update existing repository
-		_, err = db.Exec(`
-			UPDATE repositories 
-			SET url = $1, description = $2, stars = $3, readme_content = $4, language = $5, manifest = $6, path = $7, metadata = $8, display_name = $9, tool_definitions = $10
+		if !proposed {
+			log.Printf("Updating repository %s without proposed manifest", repo.FullName)
+			_, err = db.Exec(`
+				UPDATE repositories 
+				SET url = $1, description = $2, stars = $3, readme_content = $4, language = $5, manifest = $6, path = $7, metadata = $8, display_name = $9, tool_definitions = $10, proposed_manifest = $11
+			WHERE id = $12
+		`, repo.URL, repo.Description, repo.Stars, repo.ReadmeContent,
+				repo.Language, repo.Manifest, repo.Path, repo.Metadata, repo.DisplayName, repo.ToolDefinitions, "{}", repoID)
+		} else {
+			log.Printf("Updating repository %s with proposed manifest", repo.FullName)
+			_, err = db.Exec(`
+				UPDATE repositories 
+				SET url = $1, description = $2, stars = $3, readme_content = $4, language = $5, path = $6, metadata = $7, display_name = $8, tool_definitions = $9, proposed_manifest = $10
 			WHERE id = $11
 		`, repo.URL, repo.Description, repo.Stars, repo.ReadmeContent,
-			repo.Language, repo.Manifest, repo.Path, repo.Metadata, repo.DisplayName, repo.ToolDefinitions, repoID)
-
+				repo.Language, repo.Path, repo.Metadata, repo.DisplayName, repo.ToolDefinitions, repo.ProposedManifest, repoID)
+		}
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Error updating repository: %v", err), http.StatusInternalServerError)
 			return
@@ -453,7 +477,7 @@ func getRepoHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Query the database
 	query := `
-			SELECT id, path, full_name, display_name, url, description, stars, language, manifest, COALESCE(icon, ''), readme_content, COALESCE(tool_definitions, '{}'), COALESCE(metadata, '{}')
+			SELECT id, path, full_name, display_name, url, description, stars, language, manifest, COALESCE(icon, ''), readme_content, COALESCE(tool_definitions, '{}'), COALESCE(metadata, '{}'), COALESCE(proposed_manifest, '{}')
 			FROM repositories 
 			WHERE id = $1
 		`
@@ -474,6 +498,7 @@ func getRepoHandler(w http.ResponseWriter, r *http.Request) {
 		&repo.ReadmeContent,
 		&repo.ToolDefinitions,
 		&repo.Metadata,
+		&repo.ProposedManifest,
 	)
 
 	if err == sql.ErrNoRows {
@@ -555,6 +580,87 @@ func rescrapeHandler(w http.ResponseWriter, r *http.Request) {
 	force := query == "true"
 
 	go collectData(force)
+
+	w.WriteHeader(200)
+}
+
+func addRepoHandler(w http.ResponseWriter, r *http.Request) {
+	if !utils.IsAuthorized(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	var input struct {
+		FullName string `json:"fullName"`
+	}
+
+	err := json.NewDecoder(r.Body).Decode(&input)
+	if err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	parts := strings.Split(input.FullName, "/")
+	if len(parts) < 3 {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	owner := parts[1]
+	repo := parts[2]
+
+	query := "mcpServers filename:README.md repo:" + owner + "/" + repo
+	opts := &github.SearchOptions{
+		ListOptions: github.ListOptions{
+			PerPage: 1000,
+		},
+	}
+
+	result, _, err := githubClient.Search.Code(r.Context(), query, opts)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error searching repositories: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	var errs []error
+	for _, codeResult := range result.CodeResults {
+		owner := *codeResult.Repository.Owner.Login
+		repoName := *codeResult.Repository.Name
+		path := codeResult.GetPath()
+		log.Printf("Processing repository: %s/%s/%s", owner, repoName, path)
+		err := AddRepo(r.Context(), owner, repoName, path, false)
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if len(errs) > 0 {
+		http.Error(w, fmt.Sprintf("Error adding repositories: %v", errs), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(200)
+}
+
+func approveRepoHandler(w http.ResponseWriter, r *http.Request) {
+	if !utils.IsAuthorized(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	repoID := r.PathValue("id")
+
+	query := `
+		UPDATE repositories
+		SET manifest = proposed_manifest,
+    		proposed_manifest = NULL
+		WHERE id = $1
+	`
+	_, err := db.Exec(query, repoID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Error approving repository: %v", err), http.StatusInternalServerError)
+		return
+	}
 
 	w.WriteHeader(200)
 }

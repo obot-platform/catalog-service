@@ -2,20 +2,21 @@ package types
 
 // RepoInfo stores information about a repository
 type RepoInfo struct {
-	ID              int    `json:"id"`
-	Path            string `json:"path"`
-	DisplayName     string `json:"displayName"`
-	FullName        string `json:"fullName"`
-	URL             string `json:"url"`
-	Description     string `json:"description"`
-	Stars           int    `json:"stars"`
-	ReadmeContent   string `json:"readmeContent"`
-	Language        string `json:"language"`
-	Metadata        string `json:"metadata"`
-	License         string `json:"license"`
-	Icon            string `json:"icon"`
-	Manifest        string `json:"manifest"`
-	ToolDefinitions string `json:"toolDefinitions"`
+	ID               int    `json:"id"`
+	Path             string `json:"path"`
+	DisplayName      string `json:"displayName"`
+	FullName         string `json:"fullName"`
+	URL              string `json:"url"`
+	Description      string `json:"description"`
+	Stars            int    `json:"stars"`
+	ReadmeContent    string `json:"readmeContent"`
+	Language         string `json:"language"`
+	Metadata         string `json:"metadata"`
+	License          string `json:"license"`
+	Icon             string `json:"icon"`
+	Manifest         string `json:"manifest"`
+	ProposedManifest string `json:"proposedManifest"`
+	ToolDefinitions  string `json:"toolDefinitions"`
 }
 
 type MCPServerManifest struct {
@@ -46,6 +47,7 @@ type MCPPair struct {
 	Description string `json:"description"`
 	Required    bool   `json:"required"`
 	Sensitive   bool   `json:"sensitive"`
+	File        bool   `json:"file,omitempty"`
 }
 
 type ToolResponse struct {

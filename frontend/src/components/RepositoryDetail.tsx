@@ -41,6 +41,14 @@ const RepositoryDetail = () => {
   const [newMetaKey, setNewMetaKey] = useState("");
   const [newMetaValue, setNewMetaValue] = useState("");
   const { toast } = useToast();
+  const [hasToken, setHasToken] = useState(false);
+
+  useEffect(() => {
+    const cookieMatch = document.cookie.match(
+      /obot-catalog-server-token=([^;]+)/
+    );
+    setHasToken(!!cookieMatch);
+  }, []);
 
   useEffect(() => {
     const fetchRepository = async () => {
@@ -139,6 +147,78 @@ const RepositoryDetail = () => {
       toast({
         title: "Save Failed",
         description: `There was an error saving the metadata. Error: ${error}`,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const saveRepository = async () => {
+    try {
+      const manifest = JSON.parse(configText);
+      const response = await fetch(`/api/repos/${id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(manifest),
+      });
+
+      if (!response.ok) {
+        throw new Error(response.statusText);
+      }
+
+      toast({
+        title: "Metadata Saved",
+        description: "The metadata was updated successfully.",
+      });
+      setConfigError(null);
+      setRunDialogOpen(false);
+    } catch (error) {
+      toast({
+        title: "Save Failed",
+        description: `There was an error saving the metadata. Error: ${error}`,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const regenerateConfiguration = async () => {
+    try {
+      const response = await fetch(`/api/repos/${id}/generate`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        throw new Error(response.statusText);
+      }
+      toast({
+        title: "Configuration Regenerated",
+        description: "The configuration was regenerated successfully.",
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: `There was an error regenerating the configuration. Error: ${error}`,
+        variant: "destructive",
+      });
+    }
+  };
+
+  const approveRepository = async () => {
+    try {
+      const response = await fetch(`/api/repos/${id}/approve`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        throw new Error(response.statusText);
+      }
+      toast({
+        title: "Configuration Approved",
+        description: "The configuration was approved successfully.",
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: `There was an error approving the configuration. Error: ${error}`,
         variant: "destructive",
       });
     }
@@ -271,43 +351,33 @@ const RepositoryDetail = () => {
                   >
                     {configText}
                   </SyntaxHighlighter>
-                  <Button
-                    onClick={() => setRunDialogOpen(true)}
-                    className="mt-4 mr-2"
-                    variant="outline"
-                  >
-                    Edit Configuration
-                  </Button>
-                  <Button
-                    onClick={async () => {
-                      try {
-                        const response = await fetch(
-                          `/api/repos/${id}/generate`,
-                          {
-                            method: "POST",
-                          }
-                        );
-                        if (!response.ok) {
-                          throw new Error(response.statusText);
-                        }
-                        toast({
-                          title: "Configuration Regenerated",
-                          description:
-                            "The configuration was regenerated successfully.",
-                        });
-                      } catch (error) {
-                        toast({
-                          title: "Error",
-                          description: `There was an error regenerating the configuration. Error: ${error}`,
-                          variant: "destructive",
-                        });
-                      }
-                    }}
-                    className="mt-4"
-                    variant="outline"
-                  >
-                    Regenerate Configuration
-                  </Button>
+                  {hasToken && (
+                    <>
+                      <Button
+                        onClick={() => setRunDialogOpen(true)}
+                        className="mt-4 mr-2"
+                        variant="outline"
+                      >
+                        Edit Configuration
+                      </Button>
+                      <Button
+                        onClick={regenerateConfiguration}
+                        className="mt-4 mr-2"
+                        variant="outline"
+                      >
+                        Regenerate Configuration
+                      </Button>
+                      {repository.proposedManifest != "{}" && (
+                        <Button
+                          onClick={approveRepository}
+                          className="mt-4"
+                          variant="outline"
+                        >
+                          Approve Configuration
+                        </Button>
+                      )}
+                    </>
+                  )}
                   <Dialog open={runDialogOpen} onOpenChange={setRunDialogOpen}>
                     <DialogContent className="sm:max-w-[600px]">
                       <DialogHeader>
@@ -356,36 +426,7 @@ const RepositoryDetail = () => {
                           Cancel
                         </Button>
                         <Button
-                          onClick={async () => {
-                            try {
-                              const manifest = JSON.parse(configText);
-                              const response = await fetch(`/api/repos/${id}`, {
-                                method: "PUT",
-                                headers: {
-                                  "Content-Type": "application/json",
-                                },
-                                body: JSON.stringify(manifest),
-                              });
-
-                              if (!response.ok) {
-                                throw new Error(response.statusText);
-                              }
-
-                              toast({
-                                title: "Metadata Saved",
-                                description:
-                                  "The metadata was updated successfully.",
-                              });
-                              setConfigError(null);
-                              setRunDialogOpen(false);
-                            } catch (error) {
-                              toast({
-                                title: "Save Failed",
-                                description: `There was an error saving the metadata. Error: ${error}`,
-                                variant: "destructive",
-                              });
-                            }
-                          }}
+                          onClick={saveRepository}
                           disabled={!!configError}
                         >
                           Save
@@ -526,57 +567,61 @@ const RepositoryDetail = () => {
                       value={value}
                       readOnly
                     />
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      onClick={() => {
-                        const updated = { ...metadata };
-                        delete updated[key];
-                        setMetadata(updated);
-                        updateMetadata(updated);
-                      }}
-                    >
-                      Remove
-                    </Button>
+                    {hasToken && (
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => {
+                          const updated = { ...metadata };
+                          delete updated[key];
+                          setMetadata(updated);
+                          updateMetadata(updated);
+                        }}
+                      >
+                        Remove
+                      </Button>
+                    )}
                   </div>
                 ))
               ) : (
                 <p className="text-muted-foreground">No metadata defined.</p>
               )}
 
-              <div className="border-t pt-4 space-y-2">
-                <h4 className="text-sm font-medium">Add New Metadata</h4>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="Key"
-                    className="input border px-2 py-1 w-1/3"
-                    value={newMetaKey}
-                    onChange={(e) => setNewMetaKey(e.target.value)}
-                  />
-                  <input
-                    type="text"
-                    placeholder="Value"
-                    className="input border px-2 py-1 w-1/2"
-                    value={newMetaValue}
-                    onChange={(e) => setNewMetaValue(e.target.value)}
-                  />
-                  <Button
-                    size="sm"
-                    onClick={() => {
-                      if (!newMetaKey) return;
-                      const updated = { ...metadata };
-                      updated[newMetaKey] = newMetaValue;
-                      setMetadata(updated);
-                      updateMetadata(updated);
-                      setNewMetaKey("");
-                      setNewMetaValue("");
-                    }}
-                  >
-                    Add
-                  </Button>
+              {hasToken && (
+                <div className="border-t pt-4 space-y-2">
+                  <h4 className="text-sm font-medium">Add New Metadata</h4>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="Key"
+                      className="input border px-2 py-1 w-1/3"
+                      value={newMetaKey}
+                      onChange={(e) => setNewMetaKey(e.target.value)}
+                    />
+                    <input
+                      type="text"
+                      placeholder="Value"
+                      className="input border px-2 py-1 w-1/2"
+                      value={newMetaValue}
+                      onChange={(e) => setNewMetaValue(e.target.value)}
+                    />
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        if (!newMetaKey) return;
+                        const updated = { ...metadata };
+                        updated[newMetaKey] = newMetaValue;
+                        setMetadata(updated);
+                        updateMetadata(updated);
+                        setNewMetaKey("");
+                        setNewMetaValue("");
+                      }}
+                    >
+                      Add
+                    </Button>
+                  </div>
                 </div>
-              </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

@@ -174,131 +174,149 @@ func searchReposByReadme(ctx context.Context, limit int, force bool) {
 
 	// Process and store the repositories
 	for _, repo := range allRepos {
-		log.Printf("Processing repository: %s", *repo.Repository.FullName)
-		githubRepo, _, err := githubClient.Repositories.Get(ctx, *repo.Repository.Owner.Login, *repo.Repository.Name)
+		owner := *repo.Repository.Owner.Login
+		repoName := *repo.Repository.Name
+		path := repo.GetPath()
+		log.Printf("Processing repository: %s/%s/%s", owner, repoName, path)
+		err := AddRepo(ctx, owner, repoName, path, force)
 		if err != nil {
-			log.Printf("Error getting repository %s: %v", *repo.Repository.FullName, err)
+			log.Printf("Error processing repository %s: %v", *repo.Repository.FullName, err)
 			continue
 		}
+	}
+}
 
-		// Get README content from the specific path where it was found
-		readmeContent := ""
-		fileContent, _, _, err := githubClient.Repositories.GetContents(
-			ctx,
-			*githubRepo.Owner.Login,
-			*githubRepo.Name,
-			*repo.Path,
-			nil,
-		)
+func AddRepo(ctx context.Context, owner string, repo string, path string, force bool) error {
+	githubRepo, _, err := githubClient.Repositories.Get(ctx, owner, repo)
+	if err != nil {
+		return err
+	}
+
+	// Get README content from the specific path where it was found
+	readmeContent := ""
+	fileContent, _, _, err := githubClient.Repositories.GetContents(
+		ctx,
+		*githubRepo.Owner.Login,
+		*githubRepo.Name,
+		path,
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+	readmeContent, err = fileContent.GetContent()
+	if err != nil {
+		return err
+	}
+
+	fullName := *githubRepo.FullName
+	parts := strings.Split(path, "/")
+	if len(parts) > 1 {
+		// Join all parts except the last one and append to fullName
+		fullName = fullName + "/" + strings.Join(parts[:len(parts)-1], "/")
+	}
+
+	// Construct URL with correct path
+	repoURL := githubRepo.GetHTMLURL()
+	if len(parts) > 1 {
+		// Add path components to URL, excluding the filename
+		repoURL = repoURL + "/tree/" + githubRepo.GetDefaultBranch() + "/" + strings.Join(parts[:len(parts)-1], "/")
+	}
+
+	if !strings.Contains(readmeContent, "mcpServers") && !strings.Contains(readmeContent, "npx") && !strings.Contains(readmeContent, "docker") && !strings.Contains(readmeContent, "uv") {
+		return fmt.Errorf("no MCP server found in repository %s", fullName)
+	}
+
+	// Create RepoInfo
+	repoInfo := types.RepoInfo{
+		FullName:      fullName,
+		Path:          path,
+		URL:           repoURL,
+		Description:   githubRepo.GetDescription(),
+		Stars:         githubRepo.GetStargazersCount(),
+		ReadmeContent: readmeContent,
+		Language:      githubRepo.GetLanguage(),
+		Icon:          githubRepo.GetOwner().GetAvatarURL(),
+	}
+
+	var repoFromDB types.RepoInfo
+	err = db.QueryRow("SELECT readme_content, manifest, metadata, tool_definitions FROM repositories WHERE full_name = $1", fullName).Scan(&repoFromDB.ReadmeContent, &repoFromDB.Manifest, &repoFromDB.Metadata, &repoFromDB.ToolDefinitions)
+	if err == nil {
+		// Repository exists in DB, skip it
+		log.Printf("Repository %s already exists in database, skipping", fullName)
+		if repoFromDB.ReadmeContent == readmeContent && !force {
+			return nil
+		}
+	}
+
+	// if manifest exists and it is not forced, update proposed_manifest instead
+	proposed := true
+	if (repoFromDB.Manifest == "" || repoFromDB.Manifest == "{}") || force {
+		proposed = false
+	}
+
+	// Analyze repository with OpenAI
+	analysis, err := utils.AnalyzeWithOpenAI(openaiClient, fullName, readmeContent, repoFromDB.Manifest)
+	if err != nil {
+		log.Printf("Error analyzing repository %s: %v", fullName, err)
+	} else {
+		if len(analysis.Configs) == 0 {
+			return fmt.Errorf("no MCP server found in repository %s", fullName)
+		}
+
+		utils.MarkPreferred(analysis.Configs)
+
+		manifestBytes, err := json.Marshal(analysis.Configs)
 		if err != nil {
-			log.Printf("Error getting README for %s: %v", *repo.Repository.FullName, err)
+			return fmt.Errorf("error marshaling manifest for repository %s: %v", fullName, err)
 		} else {
-			readmeContent, err = fileContent.GetContent()
-			if err != nil {
-				log.Printf("Error decoding README for %s: %v", *repo.Repository.FullName, err)
-			}
-		}
-
-		fullName := *githubRepo.FullName
-		parts := strings.Split(repo.GetPath(), "/")
-		if len(parts) > 1 {
-			// Join all parts except the last one and append to fullName
-			fullName = fullName + "/" + strings.Join(parts[:len(parts)-1], "/")
-		}
-
-		// Construct URL with correct path
-		repoURL := githubRepo.GetHTMLURL()
-		if len(parts) > 1 {
-			// Add path components to URL, excluding the filename
-			repoURL = repoURL + "/tree/" + githubRepo.GetDefaultBranch() + "/" + strings.Join(parts[:len(parts)-1], "/")
-		}
-
-		if !strings.Contains(readmeContent, "mcpServers") && !strings.Contains(readmeContent, "npx") && !strings.Contains(readmeContent, "docker") && !strings.Contains(readmeContent, "uv") {
-			continue
-		}
-
-		// Create RepoInfo
-		repoInfo := types.RepoInfo{
-			FullName:      fullName,
-			Path:          repo.GetPath(),
-			URL:           repoURL,
-			Description:   githubRepo.GetDescription(),
-			Stars:         githubRepo.GetStargazersCount(),
-			ReadmeContent: readmeContent,
-			Language:      githubRepo.GetLanguage(),
-			Icon:          githubRepo.GetOwner().GetAvatarURL(),
-		}
-
-		var repoFromDB types.RepoInfo
-		err = db.QueryRow("SELECT readme_content, manifest, metadata, tool_definitions FROM repositories WHERE full_name = $1", fullName).Scan(&repoFromDB.ReadmeContent, &repoFromDB.Manifest, &repoFromDB.Metadata, &repoFromDB.ToolDefinitions)
-		if err == nil {
-			// Repository exists in DB, skip it
-			log.Printf("Repository %s already exists in database, skipping", fullName)
-			if repoFromDB.ReadmeContent == readmeContent && os.Getenv("RESCRAPE") != "true" {
-				continue
-			}
-		}
-
-		// Analyze repository with OpenAI
-		analysis, err := utils.AnalyzeWithOpenAI(openaiClient, fullName, readmeContent, repoFromDB.Manifest)
-		if err != nil {
-			log.Printf("Error analyzing repository %s: %v", fullName, err)
-		} else {
-			if len(analysis.Configs) == 0 {
-				log.Printf("No MCP server found in repository %s", fullName)
-				continue
-			}
-
-			utils.MarkPreferred(analysis.Configs)
-
-			manifestBytes, err := json.Marshal(analysis.Configs)
-			if err != nil {
-				log.Printf("Error marshaling manifest for repository %s: %v", fullName, err)
+			if proposed {
+				repoInfo.ProposedManifest = string(manifestBytes)
 			} else {
 				repoInfo.Manifest = string(manifestBytes)
 			}
+		}
 
-			metadata := map[string]string{}
-			if repoInfo.Metadata != "" {
-				err = json.Unmarshal([]byte(repoInfo.Metadata), &metadata)
-				if err != nil {
-					log.Printf("Error unmarshalling metadata for repository %s: %v", fullName, err)
-				}
-			}
-			metadata["categories"] = analysis.Category
-			metadataBytes, err := json.Marshal(metadata)
+		metadata := map[string]string{}
+		if repoInfo.Metadata != "" {
+			err = json.Unmarshal([]byte(repoInfo.Metadata), &metadata)
 			if err != nil {
-				log.Printf("Error marshaling metadata for repository %s: %v", fullName, err)
-			} else {
-				repoInfo.Metadata = string(metadataBytes)
-			}
-			repoInfo.Description = analysis.Description
-			repoInfo.DisplayName = analysis.Name
-		}
-
-		foundPreferred := false
-		for _, config := range analysis.Configs {
-			if config.Preferred {
-				foundPreferred = true
-				break
+				return fmt.Errorf("error unmarshalling metadata for repository %s: %v", fullName, err)
 			}
 		}
-
-		if foundPreferred {
-			if repoFromDB.ToolDefinitions == "" || force {
-				err = scrapeToolDefinitions(ctx, &repoInfo)
-				if err != nil {
-					log.Printf("Error scraping tool definitions for repository %s: %v", fullName, err)
-				}
-			}
+		metadata["categories"] = analysis.Category
+		metadataBytes, err := json.Marshal(metadata)
+		if err != nil {
+			return fmt.Errorf("error marshaling metadata for repository %s: %v", fullName, err)
+		} else {
+			repoInfo.Metadata = string(metadataBytes)
 		}
-
-		if repoInfo.ToolDefinitions == "" {
-			repoInfo.ToolDefinitions = "{}"
-		}
-
-		utils.SaveRepo(db, repoInfo)
+		repoInfo.Description = analysis.Description
+		repoInfo.DisplayName = analysis.Name
 	}
+
+	foundPreferred := false
+	for _, config := range analysis.Configs {
+		if config.Preferred {
+			foundPreferred = true
+			break
+		}
+	}
+
+	if foundPreferred {
+		if repoFromDB.ToolDefinitions == "" || repoFromDB.ToolDefinitions == "{}" || force {
+			err = scrapeToolDefinitions(ctx, &repoInfo)
+			if err != nil {
+				return fmt.Errorf("error scraping tool definitions for repository %s: %v", fullName, err)
+			}
+		}
+	}
+
+	if repoInfo.ToolDefinitions == "" {
+		repoInfo.ToolDefinitions = "{}"
+	}
+
+	return utils.SaveRepo(db, repoInfo, proposed)
 }
 
 func scrapeToolDefinitions(ctx context.Context, repo *types.RepoInfo) error {
@@ -316,7 +334,7 @@ func scrapeToolDefinitions(ctx context.Context, repo *types.RepoInfo) error {
 
 		var allResults []*github.CodeResult
 
-		query1 := fmt.Sprintf("tool language:typescript repo:%s/%s", parts[0], parts[1])
+		query1 := fmt.Sprintf("tool extension:ts repo:%s/%s", parts[0], parts[1])
 
 		result1, resp, err := githubClient.Search.Code(ctx, query1, opts)
 		if err != nil {
@@ -330,7 +348,7 @@ func scrapeToolDefinitions(ctx context.Context, repo *types.RepoInfo) error {
 
 		allResults = append(allResults, result1.CodeResults...)
 
-		query2 := fmt.Sprintf("mcp.tool language:python repo:%s/%s", parts[0], parts[1])
+		query2 := fmt.Sprintf("mcp.tool extension:py repo:%s/%s", parts[0], parts[1])
 
 		result2, resp, err := githubClient.Search.Code(ctx, query2, opts)
 		if err != nil {
@@ -416,8 +434,8 @@ func scrapeToolDefinitions(ctx context.Context, repo *types.RepoInfo) error {
 
 		The properties description should be concise and to the point on what this tool parameter is for.
 
-		If you can't find any tool definitions, return an empty ToolResponse. Don't hallucinate.
-		`, data.String())
+		If you can't find any tool definitions, try to fetch tool from readme. return an empty ToolResponse. Don't hallucinate. You have readme as %s.
+		`, data.String(), repo.ReadmeContent)
 
 		response, err := openaiClient.CreateChatCompletion(
 			ctx,

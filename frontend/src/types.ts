@@ -13,6 +13,7 @@ export interface Repository {
   manifest: string;
   metadata: string;
   toolDefinitions: string;
+  proposedManifest: string;
 }
 
 export interface Stats {

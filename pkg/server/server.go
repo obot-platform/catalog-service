@@ -75,7 +75,9 @@ func Run() {
 	mux.HandleFunc("PUT /api/repos/{id}", updateRepoHandler)
 	mux.HandleFunc("PUT /api/repos/{id}/metadata", updateRepoMetadataHandler)
 	mux.HandleFunc("POST /api/repos/{id}/generate", generateConfigForSpecificRepoHandler)
+	mux.HandleFunc("POST /api/repos/{id}/approve", approveRepoHandler)
 	mux.HandleFunc("POST /api/repos/rescrape", rescrapeHandler)
+	mux.HandleFunc("POST /api/repos/add", addRepoHandler)
 
 	// Create a file server for the static files
 	fs := http.FileServer(http.Dir("./frontend/dist"))
@@ -142,6 +144,15 @@ func initDB() {
 	`)
 	if err != nil {
 		log.Fatalf("Error creating repositories table: %v", err)
+	}
+	applyMigrations()
+}
+
+func applyMigrations() {
+	if _, err := db.Exec(`
+		ALTER TABLE repositories ADD COLUMN IF NOT EXISTS proposed_manifest JSONB;
+	`); err != nil {
+		log.Fatalf("Error Adding proposed_manifest column: %v", err)
 	}
 }
 
