@@ -223,8 +223,7 @@ const Dashboard = () => {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All</SelectItem>
-                <SelectItem value="Featured">Featured</SelectItem>
-                <SelectItem value="Certified">Certified</SelectItem>
+                <SelectItem value="Verified">Verified</SelectItem>
               </SelectContent>
             </Select>
 

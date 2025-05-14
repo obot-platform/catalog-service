@@ -563,23 +563,40 @@ const RepositoryDetail = () => {
                     />
                     <input
                       type="text"
-                      className="input border px-2 py-1 w-1/2 text-muted-foreground"
+                      className={`input border px-2 py-1 w-1/2 ${
+                        !hasToken ? "text-muted-foreground" : ""
+                      }`}
                       value={value}
-                      readOnly
+                      onChange={(e) => {
+                        const updated = { ...metadata };
+                        updated[key] = e.target.value;
+                        setMetadata(updated);
+                      }}
+                      readOnly={!hasToken}
                     />
                     {hasToken && (
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        onClick={() => {
-                          const updated = { ...metadata };
-                          delete updated[key];
-                          setMetadata(updated);
-                          updateMetadata(updated);
-                        }}
-                      >
-                        Remove
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          onClick={() => {
+                            updateMetadata(metadata);
+                          }}
+                        >
+                          Update
+                        </Button>
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => {
+                            const updated = { ...metadata };
+                            delete updated[key];
+                            setMetadata(updated);
+                            updateMetadata(updated);
+                          }}
+                        >
+                          Remove
+                        </Button>
+                      </div>
                     )}
                   </div>
                 ))

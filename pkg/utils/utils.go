@@ -8,7 +8,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"slices"
+	"strings"
+	"time"
 
+	"github.com/google/go-github/v60/github"
 	"github.com/obot-platform/catalog-service/pkg/types"
 	"github.com/sashabaranov/go-openai"
 )
@@ -221,4 +225,239 @@ Return OpenAIResponse which contains a list of MCPServerManifest which supports 
 	}
 
 	return result, nil
+}
+
+func UpdateRepo(ctx context.Context, repo types.RepoInfo, force bool, openaiClient *openai.Client, fullName, readmeContent string, db *sql.DB, githubClient *github.Client) error {
+	// if manifest exists and it is not forced, update proposed_manifest instead
+	proposed := true
+	if (repo.Manifest == "" || repo.Manifest == "{}") || force {
+		proposed = false
+	}
+
+	// Analyze repository with OpenAI
+	analysis, err := AnalyzeWithOpenAI(openaiClient, fullName, readmeContent, repo.Manifest)
+	if err != nil {
+		log.Printf("Error analyzing repository %s: %v", fullName, err)
+	} else {
+		if len(analysis.Configs) == 0 {
+			return fmt.Errorf("no MCP server found in repository %s", fullName)
+		}
+
+		MarkPreferred(analysis.Configs)
+
+		manifestBytes, err := json.Marshal(analysis.Configs)
+		if err != nil {
+			return fmt.Errorf("error marshaling manifest for repository %s: %v", fullName, err)
+		} else {
+			if proposed {
+				repo.ProposedManifest = string(manifestBytes)
+			} else {
+				repo.Manifest = string(manifestBytes)
+			}
+		}
+
+		metadata := map[string]string{}
+		if repo.Metadata != "" {
+			err = json.Unmarshal([]byte(repo.Metadata), &metadata)
+			if err != nil {
+				return fmt.Errorf("error unmarshalling metadata for repository %s: %v", fullName, err)
+			}
+		}
+		verified := false
+		existingCategories := strings.Split(metadata["categories"], ",")
+		if !slices.Contains(existingCategories, "Verified") {
+			verified = true
+		}
+		categories := analysis.Category
+		if verified {
+			categories = categories + ",Verified"
+		}
+		metadata["categories"] = categories
+		metadataBytes, err := json.Marshal(metadata)
+		if err != nil {
+			return fmt.Errorf("error marshaling metadata for repository %s: %v", fullName, err)
+		} else {
+			repo.Metadata = string(metadataBytes)
+		}
+		repo.Description = analysis.Description
+		repo.DisplayName = analysis.Name
+	}
+
+	foundPreferred := false
+	for _, config := range analysis.Configs {
+		if config.Preferred {
+			foundPreferred = true
+			break
+		}
+	}
+
+	if foundPreferred {
+		if repo.ToolDefinitions == "" || repo.ToolDefinitions == "{}" || force {
+			err = ScrapeToolDefinitions(ctx, &repo, db, githubClient, openaiClient)
+			if err != nil {
+				return fmt.Errorf("error scraping tool definitions for repository %s: %v", fullName, err)
+			}
+		}
+	}
+
+	if repo.ToolDefinitions == "" {
+		repo.ToolDefinitions = "{}"
+	}
+
+	return SaveRepo(db, repo, proposed)
+
+}
+
+func ScrapeToolDefinitions(ctx context.Context, repo *types.RepoInfo, db *sql.DB, githubClient *github.Client, openaiClient *openai.Client) error {
+	for {
+		opts := &github.SearchOptions{
+			ListOptions: github.ListOptions{
+				PerPage: 1000,
+			},
+		}
+		parts := strings.Split(repo.FullName, "/")
+
+		if len(parts) < 2 {
+			return fmt.Errorf("invalid repo name: %s", repo.FullName)
+		}
+
+		var allResults []*github.CodeResult
+
+		query1 := fmt.Sprintf("tool extension:ts repo:%s/%s", parts[0], parts[1])
+
+		result1, resp, err := githubClient.Search.Code(ctx, query1, opts)
+		if err != nil {
+			if _, ok := err.(*github.RateLimitError); ok {
+				log.Printf("Hit rate limit, waiting for reset after time %s...\n", time.Until(resp.Rate.Reset.Time))
+				time.Sleep(time.Until(resp.Rate.Reset.Time))
+				continue
+			}
+			return err
+		}
+
+		allResults = append(allResults, result1.CodeResults...)
+
+		query2 := fmt.Sprintf("mcp.tool extension:py repo:%s/%s", parts[0], parts[1])
+
+		result2, resp, err := githubClient.Search.Code(ctx, query2, opts)
+		if err != nil {
+			if _, ok := err.(*github.RateLimitError); ok {
+				log.Printf("Hit rate limit, waiting for reset after time %s...\n", time.Until(resp.Rate.Reset.Time))
+				time.Sleep(time.Until(resp.Rate.Reset.Time))
+				continue
+			}
+			return err
+		}
+
+		allResults = append(allResults, result2.CodeResults...)
+
+		resultSet := make(map[string]*github.CodeResult)
+		for _, codeResult := range allResults {
+			resultSet[*codeResult.Repository.Owner.Login+"/"+*codeResult.Repository.Name+"/"+*codeResult.Path] = codeResult
+		}
+
+		filteredResults := make([]*github.CodeResult, 0)
+		for _, codeResult := range resultSet {
+			filteredResults = append(filteredResults, codeResult)
+		}
+
+		data := strings.Builder{}
+
+		for _, codeResult := range filteredResults {
+			prefix := strings.TrimSuffix(repo.Path, "README.md")
+			if !strings.HasPrefix(*codeResult.Path, prefix) {
+				continue
+			}
+
+			fileContent, _, _, err := githubClient.Repositories.GetContents(
+				ctx,
+				*codeResult.Repository.Owner.Login,
+				*codeResult.Repository.Name,
+				*codeResult.Path,
+				nil,
+			)
+			if err != nil {
+				return err
+			}
+
+			content, err := fileContent.GetContent()
+			if err != nil {
+				return err
+			}
+
+			data.WriteString(content)
+		}
+
+		prompt := fmt.Sprintf(`
+		You are a helpful assistant that extracts tool definitions from a given code.
+		Here is the code:
+		%s
+
+		Tool data should be in json format. return ToolResponse.
+
+		type ToolResponse struct {
+			Tools []MCPTool json:"tools"
+		}
+
+		type MCPTool struct {
+			Name        string      json:"name"
+			Description string      json:"description"
+			InputSchema InputSchema json:"inputSchema,omitempty"
+		}
+
+		type InputSchema struct {
+			Properties map[string]Property json:"properties"
+		}
+
+		type Property struct {
+			Type        string json:"type"
+			Description string json:"description"
+			Required    bool   json:"required"
+		}
+		
+		The tool description should be concise and to the point on what this tool is for.
+
+		For typescript code, it can also be added through server.tool() method.
+
+		For python code, it is also added through @mcp.tool() decorator.
+
+		The properties description should be concise and to the point on what this tool parameter is for.
+
+		If you can't find any tool definitions, try to fetch tool from readme. return an empty ToolResponse. Don't hallucinate. You have readme as %s.
+		`, data.String(), repo.ReadmeContent)
+
+		response, err := openaiClient.CreateChatCompletion(
+			ctx,
+			openai.ChatCompletionRequest{
+				Model: openai.GPT4Dot1,
+				Messages: []openai.ChatCompletionMessage{
+					{
+						Role:    openai.ChatMessageRoleUser,
+						Content: prompt,
+					},
+				},
+				ResponseFormat: &openai.ChatCompletionResponseFormat{
+					Type: openai.ChatCompletionResponseFormatTypeJSONObject,
+				},
+			},
+		)
+		if err != nil {
+			return fmt.Errorf("error getting response from OpenAI: %v", err)
+		}
+
+		var tools types.ToolResponse
+		err = json.Unmarshal([]byte(response.Choices[0].Message.Content), &tools)
+		if err != nil {
+			return fmt.Errorf("error unmarshalling tools: %v", err)
+		}
+
+		toolRaw, err := json.Marshal(tools.Tools)
+		if err != nil {
+			return fmt.Errorf("error marshalling tools: %v", err)
+		}
+
+		log.Printf("Updating Tool definitions for %s", repo.FullName)
+		repo.ToolDefinitions = string(toolRaw)
+		return nil
+	}
 }

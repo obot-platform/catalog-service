@@ -130,9 +130,14 @@ func getReposHandler(w http.ResponseWriter, r *http.Request) {
 				if metadata["Featured"] == "true" {
 					repos = append(repos, repo)
 				}
-			} else if filter == "Certified" {
-				if metadata["Certified"] == "true" {
-					repos = append(repos, repo)
+			} else if filter == "Verified" {
+				categories := metadata["categories"]
+				parts := strings.Split(categories, ",")
+				for _, part := range parts {
+					if strings.TrimSpace(part) == "Verified" {
+						repos = append(repos, repo)
+						break
+					}
 				}
 			}
 			overrideTotalCount = true
@@ -340,97 +345,9 @@ func generateConfigForSpecificRepoHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	proposed := true
-	if repo.Manifest == "{}" || force {
-		proposed = false
-	}
-
-	// Process the repository
-	analysis, err := utils.AnalyzeWithOpenAI(openaiClient, repo.FullName, readme, repo.Manifest)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Error processing repository: %v", err), http.StatusInternalServerError)
+	if err := utils.UpdateRepo(r.Context(), repo, force, openaiClient, repo.FullName, readme, db, githubClient); err != nil {
+		http.Error(w, fmt.Sprintf("Error updating repository: %v", err), http.StatusInternalServerError)
 		return
-	}
-	if len(analysis.Configs) == 0 {
-		log.Printf("No MCP server found in repository %s", repo.FullName)
-		return
-	}
-
-	utils.MarkPreferred(analysis.Configs)
-
-	manifestBytes, err := json.Marshal(analysis.Configs)
-	if err != nil {
-		log.Printf("Error marshaling manifest for repository %s: %v", repo.FullName, err)
-	} else {
-		if proposed {
-			repo.ProposedManifest = string(manifestBytes)
-		} else {
-			repo.Manifest = string(manifestBytes)
-		}
-	}
-
-	metadata := map[string]string{}
-	if repo.Metadata != "" {
-		err = json.Unmarshal([]byte(repo.Metadata), &metadata)
-		if err != nil {
-			log.Printf("Error unmarshalling metadata for repository %s: %v", repo.FullName, err)
-		}
-	}
-	metadata["categories"] = analysis.Category
-	metadataBytes, err := json.Marshal(metadata)
-	if err != nil {
-		log.Printf("Error marshaling metadata for repository %s: %v", repo.FullName, err)
-	} else {
-		repo.Metadata = string(metadataBytes)
-	}
-	repo.Description = analysis.Description
-	repo.DisplayName = analysis.Name
-
-	foundPreferred := false
-	for _, config := range analysis.Configs {
-		if config.Preferred {
-			foundPreferred = true
-			break
-		}
-	}
-
-	if foundPreferred {
-		err = scrapeToolDefinitions(r.Context(), &repo)
-		if err != nil {
-			log.Printf("Error scraping tool definitions for repository %s: %v", repo.FullName, err)
-		}
-	}
-
-	if repo.ToolDefinitions == "" {
-		repo.ToolDefinitions = "{}"
-	}
-
-	// Insert or update the repository in the database
-	var id int
-	if exists {
-		// Update existing repository
-		if !proposed {
-			log.Printf("Updating repository %s without proposed manifest", repo.FullName)
-			_, err = db.Exec(`
-				UPDATE repositories 
-				SET url = $1, description = $2, stars = $3, readme_content = $4, language = $5, manifest = $6, path = $7, metadata = $8, display_name = $9, tool_definitions = $10, proposed_manifest = $11
-			WHERE id = $12
-		`, repo.URL, repo.Description, repo.Stars, repo.ReadmeContent,
-				repo.Language, repo.Manifest, repo.Path, repo.Metadata, repo.DisplayName, repo.ToolDefinitions, "{}", repoID)
-		} else {
-			log.Printf("Updating repository %s with proposed manifest", repo.FullName)
-			_, err = db.Exec(`
-				UPDATE repositories 
-				SET url = $1, description = $2, stars = $3, readme_content = $4, language = $5, path = $6, metadata = $7, display_name = $8, tool_definitions = $9, proposed_manifest = $10
-			WHERE id = $11
-		`, repo.URL, repo.Description, repo.Stars, repo.ReadmeContent,
-				repo.Language, repo.Path, repo.Metadata, repo.DisplayName, repo.ToolDefinitions, repo.ProposedManifest, repoID)
-		}
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Error updating repository: %v", err), http.StatusInternalServerError)
-			return
-		}
-		id = existingID
 	}
 
 	// Return success response
@@ -438,7 +355,6 @@ func generateConfigForSpecificRepoHandler(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":  "success",
 		"message": "Repository processed successfully",
-		"id":      id,
 	})
 }
 
