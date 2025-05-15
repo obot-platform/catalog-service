@@ -160,8 +160,6 @@ For MCPServerConfig, you should look for a MCP server config in readme that look
 
 When generating category, pick from the following categories:
 
-- Popular
-- Featured
 - Cloud Platforms
 - Security & Compliance
 - Developer Tools

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
@@ -145,15 +146,71 @@ func initDB() {
 	if err != nil {
 		log.Fatalf("Error creating repositories table: %v", err)
 	}
-	applyMigrations()
+	if err := applyMigrations(); err != nil {
+		log.Fatalf("Error applying migrations: %v", err)
+	}
 }
 
-func applyMigrations() {
+func applyMigrations() error {
 	if _, err := db.Exec(`
 		ALTER TABLE repositories ADD COLUMN IF NOT EXISTS proposed_manifest JSONB;
 	`); err != nil {
-		log.Fatalf("Error Adding proposed_manifest column: %v", err)
+		return err
 	}
+
+	query := `
+		SELECT id, metadata
+		FROM repositories
+	`
+	rows, err := db.Query(query)
+	if err != nil {
+		log.Fatalf("Error querying repositories: %v", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id int
+		var metadataRaw string
+		err := rows.Scan(&id, &metadataRaw)
+		if err != nil {
+			return err
+		}
+
+		var metadata map[string]string
+		if err := json.Unmarshal([]byte(metadataRaw), &metadata); err != nil {
+			return err
+		}
+
+		if metadata["categories"] != "" {
+			parts := strings.Split(metadata["categories"], ",")
+			modified := false
+			newCategories := []string{}
+			for _, part := range parts {
+				if strings.TrimSpace(part) != "Featured" && strings.TrimSpace(part) != "Popular" {
+					newCategories = append(newCategories, part)
+				} else {
+					modified = true
+				}
+			}
+			if !modified {
+				continue
+			}
+			metadata["categories"] = strings.Join(newCategories, ",")
+			metadataBytes, err := json.Marshal(metadata)
+			if err != nil {
+				return err
+			}
+			_, err = db.Exec(`
+				UPDATE repositories SET metadata = $1::jsonb WHERE id = $2
+			`, metadataBytes, id)
+			if err != nil {
+				return err
+			}
+			log.Printf("Updated repository %d with new categories: %v", id, newCategories)
+		}
+	}
+
+	return nil
 }
 
 func initGitHubClient() {
