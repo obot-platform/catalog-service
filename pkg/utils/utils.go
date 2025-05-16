@@ -160,22 +160,26 @@ For MCPServerConfig, you should look for a MCP server config in readme that look
 
 When generating category, pick from the following categories:
 
-- Cloud Platforms
-- Security & Compliance
-- Developer Tools
-- TypeScript
-- Python
-- Go
-- Art & Culture
-- Analytics & Data
-- E-commerce
-- Marketing & Social Media
-- Productivity
-- Education
+Databases
+Data & Analytics
+File & Storage Systems
+Retrieval & Search
+SaaS & API Integrations
+Communication & Messaging
+Automation & Browsers
+Time & Scheduling
+Maps & Location
+Media & Design
+Memory & Reasoning
+Developer Tools
+Monitoring & Observability
+Infrastructure & DevOps
+Science & Research
+Finance & Commerce
 
 It can have multiple categories. connect them with comma.
 
-If config has url, it means it is SSE based MCP server. You should only populate url, urlDescription and headers. 
+If config has url, it means it is SSE based MCP server. You should only populate url, urlDescription and headers. For url that has localhost, don't include it. You should only add header if there is a specific header option in the readme or config.
 If config has command, it means it is CLI based MCP server. You should only populate command, args and env.
 
 When looking for Env in MCPServerConfig, The key of the environment variable and usually starts with UPPERCASE.
@@ -263,7 +267,7 @@ func UpdateRepo(ctx context.Context, repo types.RepoInfo, force bool, openaiClie
 		}
 		verified := false
 		existingCategories := strings.Split(metadata["categories"], ",")
-		if !slices.Contains(existingCategories, "Verified") {
+		if slices.Contains(existingCategories, "Verified") {
 			verified = true
 		}
 		categories := analysis.Category

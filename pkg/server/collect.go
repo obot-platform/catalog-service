@@ -246,9 +246,9 @@ func AddRepo(ctx context.Context, owner string, repo string, path string, force 
 	var repoFromDB types.RepoInfo
 	err = db.QueryRow("SELECT readme_content, manifest, metadata, tool_definitions FROM repositories WHERE full_name = $1", fullName).Scan(&repoFromDB.ReadmeContent, &repoFromDB.Manifest, &repoFromDB.Metadata, &repoFromDB.ToolDefinitions)
 	if err == nil {
-		// Repository exists in DB, skip it
-		log.Printf("Repository %s already exists in database, skipping", fullName)
 		if repoFromDB.ReadmeContent == readmeContent && !force {
+			// Repository exists in DB, skip it
+			log.Printf("Repository %s already exists in database, skipping", fullName)
 			return nil
 		}
 	}

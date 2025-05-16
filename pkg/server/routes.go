@@ -339,7 +339,7 @@ func generateConfigForSpecificRepoHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	var readme string
-	err = db.QueryRow("SELECT readme_content FROM repositories WHERE full_name = $1", repo.FullName).Scan(&readme)
+	err = db.QueryRow("SELECT readme_content, metadata FROM repositories WHERE full_name = $1", repo.FullName).Scan(&readme, &repo.Metadata)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Error getting readme from database: %v", err), http.StatusInternalServerError)
 		return
