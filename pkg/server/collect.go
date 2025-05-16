@@ -252,6 +252,7 @@ func AddRepo(ctx context.Context, owner string, repo string, path string, force 
 			return nil
 		}
 	}
+	repoInfo.Metadata = repoFromDB.Metadata
 
 	return utils.UpdateRepo(ctx, repoInfo, force, openaiClient, fullName, readmeContent, db, githubClient)
 }
