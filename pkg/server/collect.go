@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -86,16 +85,11 @@ func searchReposByReadme(ctx context.Context, limit int, force bool) {
 		matches := regexp.MustCompile(`github\.com/([^\s/()]+/[^\s/()]+)`).FindAllStringSubmatch(content, -1)
 		for _, match := range matches {
 			if len(match) > 1 {
-				if match[1] == "github/github-mcp-server" {
-					repoLinks = append(repoLinks, match[1])
-				}
+				repoLinks = append(repoLinks, match[1])
 			}
 		}
 	}
 	log.Printf("Found %d repos to check", len(repoLinks))
-	if slices.Contains(repoLinks, "github/github-mcp-server") {
-		fmt.Println("debug")
-	}
 
 	// Now search for mcpServers in README of each repo found
 	// Process repos in batches of 30
