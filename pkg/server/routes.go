@@ -345,7 +345,7 @@ func generateConfigForSpecificRepoHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if err := utils.UpdateRepo(r.Context(), repo, force, openaiClient, repo.FullName, readme, db, githubClient); err != nil {
+	if _, err := utils.UpdateRepo(r.Context(), repo, force, openaiClient, repo.FullName, readme, db, githubClient); err != nil {
 		http.Error(w, fmt.Sprintf("Error updating repository: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -544,7 +544,7 @@ func addRepoHandler(w http.ResponseWriter, r *http.Request) {
 		repoName := *codeResult.Repository.Name
 		path := codeResult.GetPath()
 		log.Printf("Processing repository: %s/%s/%s", owner, repoName, path)
-		err := AddRepo(r.Context(), owner, repoName, path, false)
+		_, err := AddRepo(r.Context(), owner, repoName, path, false)
 		if err != nil {
 			errs = append(errs, err)
 		}

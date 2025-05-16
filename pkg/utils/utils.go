@@ -26,12 +26,12 @@ func IsAuthorized(r *http.Request) bool {
 	return cookie.Value == expected
 }
 
-func SaveRepo(db *sql.DB, repo types.RepoInfo, proposed bool) error {
+func SaveRepo(db *sql.DB, repo types.RepoInfo, proposed bool) (string, error) {
 	// Check if repository already exists
 	var count int
 	err := db.QueryRow("SELECT COUNT(*) FROM repositories WHERE full_name = $1", repo.FullName).Scan(&count)
 	if err != nil {
-		return fmt.Errorf("error checking if repository exists: %v", err)
+		return "", fmt.Errorf("error checking if repository exists: %v", err)
 	}
 
 	if count > 0 {
@@ -56,7 +56,7 @@ func SaveRepo(db *sql.DB, repo types.RepoInfo, proposed bool) error {
 				repo.Language, repo.Path, repo.ProposedManifest, repo.Icon, repo.Metadata, repo.ToolDefinitions, repo.FullName)
 		}
 		if err != nil {
-			return fmt.Errorf("error updating repository %s: %v", repo.FullName, err)
+			return "", fmt.Errorf("error updating repository %s: %v", repo.FullName, err)
 		}
 	} else {
 		// Insert new repository
@@ -70,10 +70,10 @@ func SaveRepo(db *sql.DB, repo types.RepoInfo, proposed bool) error {
 		`, repo.FullName, repo.URL, repo.Description, repo.DisplayName, repo.Stars, repo.ReadmeContent,
 			repo.Language, repo.Path, []byte(repo.Manifest), repo.Icon, []byte(repo.Metadata), []byte(repo.ToolDefinitions))
 		if err != nil {
-			return fmt.Errorf("error inserting repository %s: %v", repo.FullName, err)
+			return "", fmt.Errorf("error inserting repository %s: %v", repo.FullName, err)
 		}
 	}
-	return nil
+	return repo.FullName, nil
 }
 
 func MarkPreferred(configs []types.MCPServerConfig) {
@@ -229,7 +229,7 @@ Return OpenAIResponse which contains a list of MCPServerManifest which supports 
 	return result, nil
 }
 
-func UpdateRepo(ctx context.Context, repo types.RepoInfo, force bool, openaiClient *openai.Client, fullName, readmeContent string, db *sql.DB, githubClient *github.Client) error {
+func UpdateRepo(ctx context.Context, repo types.RepoInfo, force bool, openaiClient *openai.Client, fullName, readmeContent string, db *sql.DB, githubClient *github.Client) (string, error) {
 	// if manifest exists and it is not forced, update proposed_manifest instead
 	proposed := true
 	if (repo.Manifest == "" || repo.Manifest == "{}") || force {
@@ -242,14 +242,14 @@ func UpdateRepo(ctx context.Context, repo types.RepoInfo, force bool, openaiClie
 		log.Printf("Error analyzing repository %s: %v", fullName, err)
 	} else {
 		if len(analysis.Configs) == 0 {
-			return fmt.Errorf("no MCP server found in repository %s", fullName)
+			return "", fmt.Errorf("no MCP server found in repository %s", fullName)
 		}
 
 		MarkPreferred(analysis.Configs)
 
 		manifestBytes, err := json.Marshal(analysis.Configs)
 		if err != nil {
-			return fmt.Errorf("error marshaling manifest for repository %s: %v", fullName, err)
+			return "", fmt.Errorf("error marshaling manifest for repository %s: %v", fullName, err)
 		} else {
 			if proposed {
 				repo.ProposedManifest = string(manifestBytes)
@@ -262,7 +262,7 @@ func UpdateRepo(ctx context.Context, repo types.RepoInfo, force bool, openaiClie
 		if repo.Metadata != "" {
 			err = json.Unmarshal([]byte(repo.Metadata), &metadata)
 			if err != nil {
-				return fmt.Errorf("error unmarshalling metadata for repository %s: %v", fullName, err)
+				return "", fmt.Errorf("error unmarshalling metadata for repository %s: %v", fullName, err)
 			}
 		}
 		verified := false
@@ -277,7 +277,7 @@ func UpdateRepo(ctx context.Context, repo types.RepoInfo, force bool, openaiClie
 		metadata["categories"] = categories
 		metadataBytes, err := json.Marshal(metadata)
 		if err != nil {
-			return fmt.Errorf("error marshaling metadata for repository %s: %v", fullName, err)
+			return "", fmt.Errorf("error marshaling metadata for repository %s: %v", fullName, err)
 		} else {
 			repo.Metadata = string(metadataBytes)
 		}
@@ -297,7 +297,7 @@ func UpdateRepo(ctx context.Context, repo types.RepoInfo, force bool, openaiClie
 		if repo.ToolDefinitions == "" || repo.ToolDefinitions == "{}" || force {
 			err = ScrapeToolDefinitions(ctx, &repo, db, githubClient, openaiClient)
 			if err != nil {
-				return fmt.Errorf("error scraping tool definitions for repository %s: %v", fullName, err)
+				return "", fmt.Errorf("error scraping tool definitions for repository %s: %v", fullName, err)
 			}
 		}
 	}

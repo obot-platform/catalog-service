@@ -171,23 +171,72 @@ func searchReposByReadme(ctx context.Context, limit int, force bool) {
 	log.Printf("Found %d unique repositories", len(allRepos))
 
 	// Process and store the repositories
+	addedRepos := make(map[string]bool)
 	for _, repo := range allRepos {
 		owner := *repo.Repository.Owner.Login
 		repoName := *repo.Repository.Name
 		path := repo.GetPath()
 		log.Printf("Processing repository: %s/%s/%s", owner, repoName, path)
-		err := AddRepo(ctx, owner, repoName, path, force)
+		addedRepoName, err := AddRepo(ctx, owner, repoName, path, force)
 		if err != nil {
 			log.Printf("Error processing repository %s: %v", *repo.Repository.FullName, err)
 			continue
 		}
+		addedRepos[addedRepoName] = true
+	}
+
+	if force {
+		query := `
+		SELECT id, full_name, display_name, url, description, stars, readme_content, language, manifest, path, COALESCE(proposed_manifest, '{}'), COALESCE(tool_definitions, '{}')
+		FROM repositories
+	`
+		rows, err := db.Query(query)
+		if err != nil {
+			log.Fatalf("Error querying repositories: %v", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var repo types.RepoInfo
+			err := rows.Scan(&repo.ID,
+				&repo.FullName,
+				&repo.DisplayName,
+				&repo.URL,
+				&repo.Description,
+				&repo.Stars,
+				&repo.ReadmeContent,
+				&repo.Language,
+				&repo.Manifest,
+				&repo.Path,
+				&repo.ProposedManifest,
+				&repo.ToolDefinitions)
+			if err != nil {
+				log.Fatalf("Error scanning repository: %v", err)
+			}
+			if !addedRepos[repo.FullName] {
+				var readme string
+				var metadata string
+				err = db.QueryRow("SELECT readme_content, metadata FROM repositories WHERE full_name = $1", repo.FullName).Scan(&readme, &metadata)
+				if err != nil {
+					log.Fatalf("Error getting readme from database: %v", err)
+					return
+				}
+
+				log.Printf("Updating repository: %s from existing database", repo.FullName)
+
+				if _, err := utils.UpdateRepo(ctx, repo, force, openaiClient, repo.FullName, readme, db, githubClient); err != nil {
+					log.Fatalf("Error updating repository: %v", err)
+					return
+				}
+			}
+		}
 	}
 }
 
-func AddRepo(ctx context.Context, owner string, repo string, path string, force bool) error {
+func AddRepo(ctx context.Context, owner string, repo string, path string, force bool) (string, error) {
 	githubRepo, _, err := githubClient.Repositories.Get(ctx, owner, repo)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	// Get README content from the specific path where it was found
@@ -200,11 +249,11 @@ func AddRepo(ctx context.Context, owner string, repo string, path string, force 
 		nil,
 	)
 	if err != nil {
-		return err
+		return "", err
 	}
 	readmeContent, err = fileContent.GetContent()
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	fullName := *githubRepo.FullName
@@ -222,7 +271,7 @@ func AddRepo(ctx context.Context, owner string, repo string, path string, force 
 	}
 
 	if !strings.Contains(readmeContent, "mcpServers") && !strings.Contains(readmeContent, "npx") && !strings.Contains(readmeContent, "docker") && !strings.Contains(readmeContent, "uv") {
-		return fmt.Errorf("no MCP server found in repository %s", fullName)
+		return "", fmt.Errorf("no MCP server found in repository %s", fullName)
 	}
 
 	// Create RepoInfo
@@ -243,7 +292,7 @@ func AddRepo(ctx context.Context, owner string, repo string, path string, force 
 		if repoFromDB.ReadmeContent == readmeContent && !force {
 			// Repository exists in DB, skip it
 			log.Printf("Repository %s already exists in database, skipping", fullName)
-			return nil
+			return "", nil
 		}
 	}
 	repoInfo.Metadata = repoFromDB.Metadata
