@@ -187,7 +187,7 @@ func searchReposByReadme(ctx context.Context, limit int, force bool) {
 
 	if force {
 		query := `
-		SELECT id, full_name, display_name, url, description, stars, readme_content, language, manifest, path, COALESCE(proposed_manifest, '{}'), COALESCE(tool_definitions, '{}')
+		SELECT id, full_name, display_name, url, description, stars, readme_content, language, manifest, path, COALESCE(proposed_manifest, '{}'), COALESCE(tool_definitions, '{}'), COALESCE(icon, '')
 		FROM repositories
 	`
 		rows, err := db.Query(query)
@@ -209,7 +209,8 @@ func searchReposByReadme(ctx context.Context, limit int, force bool) {
 				&repo.Manifest,
 				&repo.Path,
 				&repo.ProposedManifest,
-				&repo.ToolDefinitions)
+				&repo.ToolDefinitions,
+				&repo.Icon)
 			if err != nil {
 				log.Fatalf("Error scanning repository: %v", err)
 			}
