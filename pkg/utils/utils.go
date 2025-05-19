@@ -120,7 +120,11 @@ func AnalyzeWithOpenAI(openaiClient *openai.Client, repoName, readmeContent, exi
 	prompt := fmt.Sprintf(`
 You are an expert in Model Context Protocol (MCP) servers. Analyze the following README from the repository %s:
 
+<readme>
+
 %s
+
+</readme>
 
 Extract and provide the following data structure in JSON format:
 
@@ -132,11 +136,11 @@ type OpenAIResponse struct {
 }
 
 type MCPServerConfig struct {
-	Env         []MCPPair json:"env"
-	Command     string    json:"command,omitempty"
-	Args        []string json:"args,omitempty"
-	HTTPHeaders []MCPPair json:"httpHeaders,omitempty"
-	URL         string    json:"url,omitempty"
+	Env            []MCPPair json:"env"
+	Command        string    json:"command,omitempty"
+	Args           []string  json:"args,omitempty"
+	HTTPHeaders    []MCPPair json:"httpHeaders,omitempty"
+	URL            string    json:"url,omitempty"
 	URLDescription string    json:"urlDescription,omitempty"
 }
 
@@ -152,13 +156,7 @@ type MCPPair struct {
 
 If the repository does not contain an MCP server, respond with an empty JSON object.
 
-For MCPServerConfig, you should look for a MCP server config in readme that looks like this:
-
-"mcpServers": {
-  ...
-}
-
-When generating category, pick from the following categories:
+When determining the Category, select from the following categories:
 
 Databases
 Data & Analytics
@@ -177,21 +175,26 @@ Infrastructure & DevOps
 Science & Research
 Finance & Commerce
 
-It can have multiple categories. connect them with comma.
+You can specify multiple categories as a comma-separated list.
 
-If config has url, it means it is SSE based MCP server. You should only populate url, urlDescription and headers. For url that has localhost, don't include it. You should only add header if there is a specific header option in the readme or config.
-If config has command, it means it is CLI based MCP server. You should only populate command, args and env.
+The Description field in the OpenAIResponse should be a concise explanation of the purpose of the MCP server.
 
-When looking for Env in MCPServerConfig, The key of the environment variable and usually starts with UPPERCASE.
-The name of the environment variable is usually a friendly name representing the environment variable and it is usually starts with lowercase. File should be true if the value of the environment variable refers to a file path.
-If you can't find any environment variables, you can return empty array for env. don't hallucinate.
+For the MCPServerConfigs, you should look for an MCP server config section in readme that looks like this:
 
-The description from OpenAIResponse should be concise and to the point on what this MCP server is for.
+"mcpServers": {
+  ...
+}
 
-Make sure you can extract command, args and env from the mcp config example in the readme.
-It is usually wrapped into json block. For other MCPPair, you should look in the readme to find possible explaination.
+If the config has a URL, it means it is an SSE-based MCP server. You should only populate the URL, URLDescription and HTTPHeaders. If the URL has localhost, don't include it. You should only add headers if there is a specific header option in the readme or config.
+If the config has a Command, it means it is a CLI-based MCP server. You should only populate the Command, Args, and Env. Make sure the values for these fields come from the configuration example in the readme. It is usually wrapped in a JSON block.
 
-Return OpenAIResponse which contains a list of MCPServerManifest which supports docker, npx and uv and a category.
+When determining the Env in the MCPServerConfig, look for the environment variables in the config in the readme. They are usually all uppercase.
+The Value field should contain the default value of the environment variable, if there is one.
+Generate a Name for the environment variable that is user-friendly (i.e., no underscores or dashes), and a Description explaining what the environment variable is for.
+File should be set to true if the value of the environment variable refers to a file path.
+If you can't find any environment variables, you can return an empty array for env. Don't hallucinate.
+
+Return an OpenAIResponse which contains a list of MCPServerConfigs which supports docker, npx, and uv and a category.
 
 `, repoName, readmeContent)
 
