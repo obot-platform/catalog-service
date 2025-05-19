@@ -312,7 +312,8 @@ func generateConfigForSpecificRepoHandler(w http.ResponseWriter, r *http.Request
 		COALESCE(manifest::text, ''),
 		COALESCE(path, ''),
 		COALESCE(proposed_manifest::text, '{}'),
-		COALESCE(tool_definitions::text, '{}')
+		COALESCE(tool_definitions::text, '{}'),
+		COALESCE(icon, '')
 		FROM repositories WHERE id = $1
 	`, repoID).Scan(
 		&exists,
@@ -328,6 +329,7 @@ func generateConfigForSpecificRepoHandler(w http.ResponseWriter, r *http.Request
 		&repo.Path,
 		&repo.ProposedManifest,
 		&repo.ToolDefinitions,
+		&repo.Icon,
 	)
 	if err != nil && err != sql.ErrNoRows {
 		http.Error(w, fmt.Sprintf("Error checking repository existence: %v", err), http.StatusInternalServerError)
