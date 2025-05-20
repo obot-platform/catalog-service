@@ -288,10 +288,16 @@ func AddRepo(ctx context.Context, owner string, repo string, path string, force 
 	}
 
 	var repoFromDB types.RepoInfo
-	err = db.QueryRow("SELECT readme_content, manifest, metadata, tool_definitions FROM repositories WHERE full_name = $1", fullName).Scan(&repoFromDB.ReadmeContent, &repoFromDB.Manifest, &repoFromDB.Metadata, &repoFromDB.ToolDefinitions)
+	err = db.QueryRow("SELECT readme_content, manifest, metadata, tool_definitions, icon FROM repositories WHERE full_name = $1", fullName).Scan(&repoFromDB.ReadmeContent, &repoFromDB.Manifest, &repoFromDB.Metadata, &repoFromDB.ToolDefinitions, &repoFromDB.Icon)
 	if err == nil {
 		if repoFromDB.ReadmeContent == readmeContent && !force {
-			// Repository exists in DB, skip it
+			// Repository exists in DB, skip it, unless it doesn't have an icon and we need to add it.
+			if repoFromDB.Icon == "" {
+				// now update in db
+				db.Exec("UPDATE repositories SET icon = $1 WHERE full_name = $2", githubRepo.GetOwner().GetAvatarURL(), fullName)
+				log.Printf("Updated icon for repository %s", fullName)
+			}
+
 			log.Printf("Repository %s already exists in database, skipping", fullName)
 			return "", nil
 		}
